@@ -1,0 +1,11 @@
+{
+  "cmake.configureOnOpen": true,
+  "cmake.preferredGenerators": ["Ninja"],
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "xaver.clang-format",
+  "[cpp]": { "editor.defaultFormatter": "xaver.clang-format" },
+  "[c]":   { "editor.defaultFormatter": "xaver.clang-format" },
+  "clangd.arguments": ["--header-insertion=never", "--clang-tidy"],
+  "files.insertFinalNewline": true,
+  "files.trimTrailingWhitespace": true
+}

@@ -1,0 +1,31 @@
+"component: engine":
+  - changed-files:
+    - any-glob-to-any-file: ["engine/**", "include/engine/**"]
+
+"component: renderer":
+  - changed-files:
+    - any-glob-to-any-file: ["platform/vulkan/**"]
+
+"component: audio":
+  - changed-files:
+    - any-glob-to-any-file: ["platform/openal/**"]
+
+"component: network":
+  - changed-files:
+    - any-glob-to-any-file: ["platform/net/**"]
+
+"component: content":
+  - changed-files:
+    - any-glob-to-any-file: ["engine/content/**"]
+
+"component: build":
+  - changed-files:
+    - any-glob-to-any-file: ["CMakeLists.txt", "CMakePresets.json", "cmake/**"]
+
+"component: ci":
+  - changed-files:
+    - any-glob-to-any-file: [".github/workflows/**", ".github/dependabot.yml"]
+
+"component: docs":
+  - changed-files:
+    - any-glob-to-any-file: ["docs/**", "*.md"]

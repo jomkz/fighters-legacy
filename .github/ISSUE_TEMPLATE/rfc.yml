@@ -1,0 +1,72 @@
+name: RFC — Design Proposal
+description: Propose a significant architectural or API change requiring community discussion
+labels: ["rfc", "status: under-discussion"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        RFCs are required for public API changes, cross-module architecture decisions,
+        new major dependencies, and changes to community-facing formats.
+        Review the RFC process in [GOVERNANCE.md](../../GOVERNANCE.md).
+
+  - type: input
+    id: title
+    attributes:
+      label: RFC title
+      placeholder: "RFC: Replace ENet with libquic for networking transport"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Primary component affected
+      options:
+        - engine / HAL
+        - renderer (Vulkan)
+        - audio (OpenAL)
+        - network (ENet)
+        - content system
+        - flight model
+        - ai system
+        - mission / campaign
+        - build system
+        - multiple / cross-cutting
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why is this change needed? What problem does it solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed design
+      description: Describe the change in detail. Include interfaces, data structures, or code sketches as needed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other approaches did you consider? Why were they rejected?
+    validations:
+      required: true
+
+  - type: textarea
+    id: drawbacks
+    attributes:
+      label: Drawbacks
+      description: What are the costs and risks of this change?
+
+  - type: textarea
+    id: open_questions
+    attributes:
+      label: Open questions
+      description: What unresolved questions should the discussion address?

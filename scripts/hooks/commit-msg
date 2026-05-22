@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Auto-append DCO Signed-off-by if not already present.
+# Install: cp scripts/hooks/commit-msg .git/hooks/ && chmod +x .git/hooks/commit-msg
+SOB="Signed-off-by: $(git config user.name) <$(git config user.email)>"
+grep -qF "$SOB" "$1" || printf "\n%s\n" "$SOB" >> "$1"

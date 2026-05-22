@@ -1,0 +1,107 @@
+# Component labels
+- name: "component: engine"
+  color: "0075ca"
+  description: "Core engine / HAL / SDL3 windowing"
+
+- name: "component: renderer"
+  color: "0075ca"
+  description: "Vulkan renderer backend"
+
+- name: "component: audio"
+  color: "0075ca"
+  description: "OpenAL Soft audio system"
+
+- name: "component: network"
+  color: "0075ca"
+  description: "ENet networking layer"
+
+- name: "component: content"
+  color: "0075ca"
+  description: "IContentPack / ModLoader / AssetManager"
+
+- name: "component: flight"
+  color: "0075ca"
+  description: "Flight model"
+
+- name: "component: ai"
+  color: "0075ca"
+  description: "Lua AI runtime"
+
+- name: "component: mission"
+  color: "0075ca"
+  description: "Mission / campaign loader"
+
+- name: "component: build"
+  color: "0075ca"
+  description: "CMake build system"
+
+- name: "component: ci"
+  color: "0075ca"
+  description: "GitHub Actions / CI/CD"
+
+- name: "component: docs"
+  color: "0075ca"
+  description: "Documentation"
+
+# Type labels
+- name: "bug"
+  color: "d73a4a"
+  description: "Something isn't working"
+
+- name: "enhancement"
+  color: "a2eeef"
+  description: "New feature or improvement"
+
+- name: "documentation"
+  color: "0075ca"
+  description: "Improvements or additions to documentation"
+
+- name: "question"
+  color: "d876e3"
+  description: "Further information is requested"
+
+- name: "rfc"
+  color: "e6b905"
+  description: "Design proposal requiring community discussion"
+
+# Status labels
+- name: "duplicate"
+  color: "cfd3d7"
+  description: "This issue or pull request already exists"
+
+- name: "wontfix"
+  color: "ffffff"
+  description: "This will not be worked on"
+
+- name: "needs-info"
+  color: "e4e669"
+  description: "Waiting for more information from the reporter"
+
+- name: "good first issue"
+  color: "7057ff"
+  description: "Good for newcomers"
+
+- name: "help wanted"
+  color: "008672"
+  description: "Extra attention is needed"
+
+- name: "release"
+  color: "0e8a16"
+  description: "Release preparation or tracking"
+
+# RFC status labels
+- name: "status: under-discussion"
+  color: "fbca04"
+  description: "RFC open for community input"
+
+- name: "status: accepted"
+  color: "0e8a16"
+  description: "RFC accepted"
+
+- name: "status: rejected"
+  color: "d73a4a"
+  description: "RFC rejected"
+
+- name: "status: implemented"
+  color: "cfd3d7"
+  description: "RFC implemented and closed"

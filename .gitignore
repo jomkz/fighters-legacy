@@ -1,0 +1,87 @@
+# Claude Code
+.claude/
+
+# Build output
+build/
+out/
+.cache/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+_deps/
+
+# vcpkg
+vcpkg_installed/
+
+# User presets (local overrides — not committed)
+CMakeUserPresets.json
+
+# Compiled object files
+*.o
+*.obj
+*.lo
+*.la
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.pdb
+
+# IDE: Visual Studio
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+
+# IDE: VS Code (allow committed workspace files)
+.vscode/*
+!.vscode/tasks.json
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# IDE: CLion / JetBrains
+.idea/
+cmake-build-*/
+
+# IDE: Xcode
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# Logs and crash dumps
+logs/
+*.log
+
+# User config (not committed)
+config/user.toml
+config/bindings.toml
+
+# Packaging
+*.zip
+*.tar.gz
+*.tar.bz2
+
+# FA copyrighted game content — never commit
+*.LIB
+*.PIC
+*.PAL
+mods/fa-content/
