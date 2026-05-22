@@ -3,7 +3,11 @@
 | Document | Description |
 |---|---|
 | [development.md](development.md) | Build prerequisites (Fedora/Ubuntu/Windows/macOS), CMake presets, IDE setup, project structure |
-| [architecture.md](architecture.md) | High-level engine architecture overview |
+| [architecture.md](architecture.md) | Layered model, locked architectural decisions, content pack architecture |
+| [design.md](design.md) | Gameplay design pillars, lifted FA constraints |
+| [roadmap.md](roadmap.md) | Phase schedule, critical path, per-phase acceptance criteria |
+| [distribution.md](distribution.md) | Distribution channels, monetization strategy |
+| [modding/formats.md](modding/formats.md) | Native asset format specifications (glTF, TOML, YAML, Lua) |
 
 ## Contributing and Governance
 

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-GPL v3 clean-room reimplementation of Jane's Fighters Anthology (1998).
+GPL v3 general-purpose combat flight sim engine, inspired by Jane's Fighters Anthology (1998).
 Cross-platform: Windows 10/11, Linux, macOS. Phase 1 (engine foundation) is active.
 
 ## Architecture
@@ -44,7 +44,7 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 
 ## Key Files
 
-- `README.md` — master plan (authoritative design doc)
+- `README.md` — project overview and documentation index
 - `docs/architecture.md` — engine architecture overview
 - `docs/development.md` — build prerequisites per platform
 - `GOVERNANCE.md` — decision-making and RFC process

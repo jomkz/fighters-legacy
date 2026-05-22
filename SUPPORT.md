@@ -10,10 +10,7 @@ For questions, ideas, and general conversation use **[GitHub Discussions](https:
 | General | Anything that doesn't fit elsewhere |
 | Q&A | Questions about building, running, or modding |
 | Ideas | Feature brainstorming before filing a formal request |
-| RE Research | Jane's Fighters Anthology reverse-engineering findings |
 | Show & Tell | Community screenshots, mods, experiments |
-
-> **Note:** Discussions categories must be enabled in GitHub repository Settings → Features → Discussions after the repo goes public. The categories above are the recommended set — configure them at that time.
 
 ## GitHub Issues
 
