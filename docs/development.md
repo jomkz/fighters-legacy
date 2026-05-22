@@ -167,12 +167,41 @@ See `.github/workflows/ci.yml` for the full three-platform matrix.
 
 ## Release workflow
 
-Releases are tagged with `vMAJOR.MINOR.PATCH`. The `release.yml` workflow triggers on version tags, builds all three platforms, generates release notes via git-cliff, and creates a GitHub Release with signed SLSA build provenance.
+Releases are tagged with `vMAJOR.MINOR.PATCH`. The `release.yml` workflow triggers on version tags, builds all three platforms, generates release notes via git-cliff, and creates a GitHub Release with SLSA build provenance.
 
-To draft the changelog before tagging:
+**Requires `git-cliff`:** `cargo install git-cliff` | `dnf install git-cliff` | `brew install git-cliff`
+
+### Step 1 — Create the release PR
+
+From a clean `main`:
 
 ```bash
-./scripts/draft-changelog.sh
+git checkout main && git pull origin main
+./scripts/cut-release.sh v0.1.0
 ```
 
-Requires `git-cliff`: `cargo install git-cliff` or `dnf install git-cliff` or `brew install git-cliff`.
+This creates a `release/v0.1.0` branch, generates `CHANGELOG.md`, commits, and pushes.
+Open the printed PR URL, wait for CI, and merge.
+
+### Step 2 — Tag and trigger the release
+
+After the PR merges:
+
+```bash
+git checkout main && git pull origin main
+./scripts/tag-release.sh v0.1.0
+```
+
+This tags `main` and pushes the tag. The `release.yml` workflow fires immediately.
+
+---
+
+## Roadmap status
+
+To report phase completion against target dates:
+
+```bash
+./scripts/roadmap-status.sh
+```
+
+Queries the [GitHub Project](https://github.com/users/jomkz/projects/2) via `gh` and prints a per-phase progress table showing % done, % of time elapsed, and an on-track/at-risk/behind/overdue signal. Requires `gh` (authenticated) and GNU `date`.
