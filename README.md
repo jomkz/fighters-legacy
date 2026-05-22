@@ -12,7 +12,7 @@ sim engine** with a first-class mod system. Original FA asset support is deliver
 content plugin, identical in status to any user mod. People who do not own FA can play
 with a community-contributed free base pack using fully open asset formats.
 
-The RE corpus in `docs/fa/` (fighters-toolkit) is the foundation: 53 file formats
+The RE corpus in `docs/fa/` (fighters-codex) is the foundation: 53 file formats
 documented, game loop / physics / renderer / networking all traced from FA.EXE using
 FA.SMS symbols.
 
@@ -30,7 +30,7 @@ naming convention, or design constraint is permitted to leak into the engine lay
 | Audio | OpenAL Soft | Positional 3D audio; native music in OGG; no MIDI dependency in engine core |
 | Network transport | ENet (reliable UDP) | Reliable + unreliable channels; congestion control; cross-platform |
 | Build system | CMake 3.25+ | Cross-platform from day one |
-| Asset library | `ft_lib` as git submodule in `fa-content` repo | Reuses all 22 codecs; only used inside the FA plugin; not a submodule of this repo |
+| Asset library | `fx_lib` as git submodule in `fa-content` repo | Reuses all 22 codecs; only used inside the FA plugin; not a submodule of this repo |
 | Engine repo | `fighters-legacy` (this repo) | Separate from fighters-toolkit |
 | ft-gui future | Port to SDL3 + Vulkan | After engine HAL is stable (Phase 4) |
 | Content system | Plugin / content-pack architecture | FA assets = one plugin; mods = other plugins; engine core has zero FA dependency |
@@ -121,7 +121,7 @@ knowledge of these limits.
 ## Content Pack Architecture
 
 This is the central design decision that affects every other phase. **The engine core
-never imports or calls `ft_lib` directly.** All asset access goes through an
+never imports or calls `fx_lib` directly.** All asset access goes through an
 `IContentPack` interface.
 
 ### Mods vs Plugins
@@ -253,22 +253,22 @@ mods/
 
 Lives in the standalone [jomkz/fa-content](https://github.com/jomkz/fa-content) repository.
 Built and distributed independently; installed into `mods/fa-content/` via the mod browser.
-Implements `IContentPack` using `ft_lib`:
+Implements `IContentPack` using `fx_lib`:
 
 | Request | Translation |
 |---|---|
-| `loadMesh("F22")` | `ft_lib sh_parse_mesh("F22.SH")` → `MeshData` |
-| `loadTexture("_f22")` | `ft_lib pic_decode("_F22.PIC", pal)` → RGBA `TextureData` |
-| `loadAudio("JET_11K")` | `ft_lib audio_decode("JET.11K")` → PCM → OGG `AudioBuffer` |
-| `loadAudio("THEME")` | `ft_lib mus_decode("THEME.MUS")` → MIDI → FluidSynth PCM → OGG; cached |
-| `loadFlightModel("F22")` | `ft_lib brf_parse("F22.PT")` → `FlightModel` struct |
-| `loadMission("U01")` | `ft_lib mission_parse("U01.M")` → `MissionData` |
-| `loadCampaign("UKRAINE")` | `ft_lib cam_parse("UKRAINE.CAM")` → `CampaignData` (YAML-equivalent struct) |
-| `loadTerrain("UKRAINE")` | `ft_lib t2_parse("UKRAINE.T2")` → `TerrainData` |
-| `loadAIScript("F")` | `ft_lib ai_parse("F.AI")` → translate goto-script → Lua compatibility wrapper |
+| `loadMesh("F22")` | `fx_lib sh_parse_mesh("F22.SH")` → `MeshData` |
+| `loadTexture("_f22")` | `fx_lib pic_decode("_F22.PIC", pal)` → RGBA `TextureData` |
+| `loadAudio("JET_11K")` | `fx_lib audio_decode("JET.11K")` → PCM → OGG `AudioBuffer` |
+| `loadAudio("THEME")` | `fx_lib mus_decode("THEME.MUS")` → MIDI → FluidSynth PCM → OGG; cached |
+| `loadFlightModel("F22")` | `fx_lib brf_parse("F22.PT")` → `FlightModel` struct |
+| `loadMission("U01")` | `fx_lib mission_parse("U01.M")` → `MissionData` |
+| `loadCampaign("UKRAINE")` | `fx_lib cam_parse("UKRAINE.CAM")` → `CampaignData` (YAML-equivalent struct) |
+| `loadTerrain("UKRAINE")` | `fx_lib t2_parse("UKRAINE.T2")` → `TerrainData` |
+| `loadAIScript("F")` | `fx_lib ai_parse("F.AI")` → translate goto-script → Lua compatibility wrapper |
 
 On startup, the bridge discovers the FA installation via `FA_INSTALL_DIR` env var or
-a path dialog, then mounts the LIB archives via `ft_lib ealib`.
+a path dialog, then mounts the LIB archives via `fx_lib ealib`.
 
 **Translated assets are optionally cached to disk** (e.g. `cache/fa-content/F22.glb`)
 to avoid re-translation on every launch.
@@ -829,9 +829,9 @@ end
 return { init = patrol }
 ```
 
-## Phase 0 — Complete the Toolkit
-**Duration: 2–4 weeks | Repo: fighters-toolkit**
-**Milestone: fighters-toolkit declared feature-complete for FA modders**
+## Phase 0 — Complete the Fighters-Codex work
+**Duration: 2–4 weeks | Repo: fighters-codex**
+**Milestone: fighters-codex declared feature-complete for FA modders**
 
 ### 0.1 PLT Stats Block (the one open TODO.md item)
 - Differential save pass: vary rank / score / missions / weapons in-game,
@@ -1025,14 +1025,14 @@ turned down for stream/recording setups. All sliders save immediately on change.
 > Work tracked in [jomkz/fa-content](https://github.com/jomkz/fa-content). File paths below are relative to that repo's root.
 
 **B.1 Plugin skeleton**
-- `CMakeLists.txt`: builds the plugin shared library; links `ft_lib`.
+- `CMakeLists.txt`: builds the plugin shared library; links `fx_lib`.
 - Implements `IContentPack` including `init()` / `configure()`.
 - Manifest: `manifest.toml` with `id = "fa-content"`, `priority = 100`.
 
 **B.2 FA install discovery (inside `configure()`)**
 - Read `FA_INSTALL_DIR` env var or registry key; show a folder browser dialog via the
   `IWindow*` passed to `configure()` if not found.
-- Mount all FA LIB archives via `ft_lib ealib`; store as internal state.
+- Mount all FA LIB archives via `fx_lib ealib`; store as internal state.
 - `init()` returns `NeedsConfiguration` until a valid FA path has been confirmed;
   returns `Ready` on all subsequent launches once the path is persisted.
 
@@ -1042,13 +1042,13 @@ Implement each `IContentPack` method. Priority order:
 | Method | Translation | Effort |
 |---|---|---|
 | `loadMesh` | `sh_parse_mesh()` → `MeshData` | Medium (SH static pass already works for 94.9%) |
-| `loadTexture` | `pic_decode()` + `pal` → RGBA `TextureData` | Low (ft_lib already does this) |
+| `loadTexture` | `pic_decode()` + `pal` → RGBA `TextureData` | Low (fx_lib already does this) |
 | `loadFlightModel` | `brf_parse(*.PT)` → `FlightModel` | Low (fields documented; needs PT offsets from 0.4) |
 | `loadAIScript` | `ai_parse(.AI)` → translate goto-script → Lua compat wrapper | Low |
-| `loadMission` | `mission_parse(*.M)` → `MissionData` | Low (ft_lib already parses .M) |
+| `loadMission` | `mission_parse(*.M)` → `MissionData` | Low (fx_lib already parses .M) |
 | `loadTerrain` | `t2_parse()` → `TerrainData` | Medium |
-| `loadAudio` (SFX) | `ft_lib audio_decode()` raw PCM → OGG `AudioBuffer` | Low |
-| `loadAudio` (music) | `ft_lib mus_decode()` XMI → MIDI → FluidSynth PCM → OGG; cached to `cache/fa-content/music/` | Medium (FluidSynth render is slow; caching is essential) |
+| `loadAudio` (SFX) | `fx_lib audio_decode()` raw PCM → OGG `AudioBuffer` | Low |
+| `loadAudio` (music) | `fx_lib mus_decode()` XMI → MIDI → FluidSynth PCM → OGG; cached to `cache/fa-content/music/` | Medium (FluidSynth render is slow; caching is essential) |
 | `listAssets` | enumerate mounted LIBs | Low |
 
 **B.4 Translation cache**
@@ -1058,7 +1058,7 @@ Implement each `IContentPack` method. Priority order:
 
 ### Workstream C — RE Gap Closure
 
-Output goes to `docs/fa/` in fighters-toolkit. Run parallel to A and B.
+Output goes to `docs/fa/` in fighters-codex. Run parallel to A and B.
 
 **C.1 Audit OpenFA (GitLab, Rust) — 1 week**
 Audit their source for already-reversed SH opcodes before starting independent RE.
@@ -1678,7 +1678,7 @@ Implement all opcode handlers from C.2: `JumpToLOD`, `JumpToDamage`, `JumpToFram
 
 ## Phase 4 — ft-gui Cross-Platform Port + In-Game Mission Editor
 **Duration: 10–12 weeks (starts week 26, after engine HAL is stable)**
-**Milestone: fighters-toolkit modding GUI runs on Windows, Linux, macOS;
+**Milestone: fighters-codex modding GUI runs on Windows, Linux, macOS;
 in-game mission editor ships as part of Fighters Legacy**
 
 ### 4.1 ft-gui Cross-Platform Port (weeks 26–32)
@@ -1721,7 +1721,7 @@ No text file editing required; exports standard mission YAML.
 
 ## Phase 5 — Linux / Mac Release
 **Duration: Ongoing from day one; formal milestone at ~week 40**
-**Milestone: fighters-legacy and fighters-toolkit ship official Linux + macOS binaries**
+**Milestone: fighters-legacy and fighters-codex ship official Linux + macOS binaries**
 
 - CI matrix: `windows-latest` (MSVC), `ubuntu-24.04` (GCC/Clang), `macos-14` (arm64).
 - MoltenVK verified on Apple Silicon M-series.
