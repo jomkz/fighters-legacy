@@ -1,10 +1,6 @@
 # Architecture Overview
 
-fighters-legacy is a clean-room reimplementation of a combat flight simulator. The engine is fully **content-agnostic** — it has no knowledge of any specific game, franchise, or asset format. All game content enters the engine through a single boundary: the `IContentPack` interface.
-
-For a full description of the project vision and roadmap, see the [README](../README.md).
-
----
+fighters-legacy is a general-purpose combat flight sim engine. The engine is fully **content-agnostic** — it has no knowledge of any specific game, franchise, or asset format. All game content enters the engine through a single boundary: the `IContentPack` interface.
 
 ## Layered model
 
@@ -28,7 +24,7 @@ Thin abstraction over OS and hardware APIs. Each backend is isolated:
 
 | Module | Backend | Path |
 |---|---|---|
-| Renderer | Vulkan 1.3 | `platform/vulkan/` |
+| Renderer | Vulkan 1.3 + MoltenVK | `platform/vulkan/` |
 | Windowing / Input | SDL3 | `platform/sdl3/` |
 | Audio | OpenAL Soft | `platform/openal/` |
 | Networking | ENet | `platform/net/` |
@@ -57,13 +53,106 @@ Bridges the engine core to external content:
 
 Any repository that implements `IContentPack` and compiles to a shared library can be loaded as a content pack. The engine is indifferent to the source or format of the underlying assets.
 
-FA-specific content support is implemented in a separate repository ([fa-content](https://github.com/jomkz/fa-content)) that the engine has no compile-time or runtime dependency on. Users supply their own licensed FA installation; the bridge plugin translates FA formats into the engine's asset types at runtime.
+## Locked Architectural Decisions
 
----
+These decisions are finalized and not subject to revision without an RFC.
 
-## Key design constraints
+| Concern | Choice | Rationale |
+|---|---|---|
+| Rendering | Vulkan + MoltenVK | One API everywhere; MoltenVK → Metal on Apple Silicon |
+| Windowing / input | SDL3 | Wayland + modern controller support; long-term path |
+| Audio | OpenAL Soft | Positional 3D audio; native music in OGG; no MIDI dependency in engine core |
+| Network transport | ENet (reliable UDP) | Reliable + unreliable channels; congestion control; cross-platform |
+| Build system | CMake 3.25+ | Cross-platform from day one |
+| Engine repo | `fighters-legacy` (this repo) | Separate from fighters-toolkit |
+| ft-gui future | Port to SDL3 + Vulkan | After engine HAL is stable (Phase 4) |
+| Content system | Plugin / content-pack architecture | Each content source = one plugin; mods = other plugins; engine core has zero content dependency |
+| Native 3D models | glTF 2.0 | Royalty-free; Blender export; industry standard |
+| Native textures | PNG (source) + KTX2/DDS (GPU) | Mipmaps, BC compression; toolchain converts PNG → KTX2 at pack time |
+| Native audio | OGG Vorbis / Opus | Open, compressed, widely supported |
+| Native flight model | TOML | Human-readable, structured, easily diffable |
+| Native missions | YAML | Human-readable, tool-friendly |
+| Native campaigns | YAML | Arbitrary theater graph; no FA 6-theater limit |
+| Native terrain | Streaming heightmap chunks + JSON | No tile-count cap; supports large theaters |
+| Native AI scripts | Lua 5.4 | Embeddable, sandbox-able, moddable |
+| Multiplayer topology | `fl-server` dedicated binary + `fl-lobby` REST service | Server-authoritative; no P2P player-count cap; self-hostable |
+| Entity system | Dynamic pool, no hard caps | No fixed object count limit |
+| License | GPL v3 | Engine modifications must stay open source; protects community investment |
+| Hosting | GitHub, public repository | Unlimited Actions CI on public repos; GitHub Free sufficient |
 
-- **No FA-specific code in this repo.** fighters-legacy must build and run without fa-content or any FA installation present.
+## Content Pack Architecture
+
+This is the central design decision that affects every other phase. **The engine core has no dependency on any content library.** All asset access goes through an `IContentPack` interface.
+
+### Mods vs Plugins
+
+Content for Fighters Legacy comes in two forms.
+
+**Mods (Lua + assets)** are directories dropped into `mods/<name>/` containing a `manifest.toml` plus any combination of Lua AI scripts, glTF meshes, TOML flight model and weapon data, YAML missions and campaigns, OGG audio, and PNG / KTX2 textures. **Most user content — reskins, missions, new aircraft, custom campaigns — is a mod.** No C++ compiler required.
+
+**Plugins (compiled content packs)** are shared libraries (`.dll` / `.so` / `.dylib`) that implement the `IContentPack` interface. GPL v3 applies to compiled plugins unless a linking exception is granted. **Install compiled plugins only from authors whose source you can verify.**
+
+### IContentPack Interface
+
+```
+engine/content/IContentPack.h
+    name(), version(), priority()
+    init()              → Status { Ready | NeedsConfiguration }
+    configure(IWindow*) → bool
+    hasAsset(name, AssetType) → bool
+    loadMesh(name)        → MeshData
+    loadTexture(name)     → TextureData
+    loadAudio(name)       → AudioBuffer
+    loadFlightModel(name) → FlightModel
+    loadMission(name)     → MissionData
+    loadTerrain(name)     → TerrainData
+    loadAIScript(name)    → AIScript
+    listAssets(AssetType) → vector<string>
+```
+
+### Mod Loader
+
+```
+engine/content/ModLoader.cpp
+    scanModsDirectory("mods/")
+    loadManifest("mods/<name>/manifest.toml")
+    buildContentStack()   — sorted by priority; higher-priority packs override lower
+    resolveAsset(name, type) — walk stack until found
+```
+
+### Mod Manifest Format (TOML)
+
+```toml
+[mod]
+name        = "Example Content Pack"
+id          = "example-content"
+version     = "1.0.0"
+engine-api  = "1.0"
+priority    = 100
+depends     = []
+```
+
+### Content Pack Layout on Disk
+
+```
+mods/
+    example-content/          ← compiled content pack (ships as shared library)
+        manifest.toml
+        example-content.dll/.so
+    free-base-pack/           ← community open-content (Phase 6+)
+        manifest.toml
+        aircraft/
+        missions/
+        terrain/
+        audio/
+    my-reskin-mod/            ← user mod example
+        manifest.toml
+        aircraft/f22/
+            F22.png
+```
+
+## Key Design Constraints
+
 - **Cross-platform from day one.** All code compiles on MSVC (Windows), GCC/Clang (Linux), and AppleClang (macOS). Platform-specific paths are confined to `platform/`.
 - **`IContentPack` is the only content boundary.** Adding a new content source means implementing this interface, not modifying the engine.
 - **C++20, no extensions.** `CMAKE_CXX_EXTENSIONS OFF` is enforced across all presets.
