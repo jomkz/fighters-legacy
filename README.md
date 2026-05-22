@@ -30,7 +30,7 @@ naming convention, or design constraint is permitted to leak into the engine lay
 | Audio | OpenAL Soft | Positional 3D audio; native music in OGG; no MIDI dependency in engine core |
 | Network transport | ENet (reliable UDP) | Reliable + unreliable channels; congestion control; cross-platform |
 | Build system | CMake 3.25+ | Cross-platform from day one |
-| Asset library | `ft_lib` as git submodule | Reuses all 22 codecs; only used inside the FA plugin |
+| Asset library | `ft_lib` as git submodule in `fa-content` repo | Reuses all 22 codecs; only used inside the FA plugin; not a submodule of this repo |
 | Engine repo | `fighters-legacy` (this repo) | Separate from fighters-toolkit |
 | ft-gui future | Port to SDL3 + Vulkan | After engine HAL is stable (Phase 4) |
 | Content system | Plugin / content-pack architecture | FA assets = one plugin; mods = other plugins; engine core has zero FA dependency |
@@ -62,7 +62,7 @@ improve it privately, and ship a closed product without contributing back.
 | Asset files (glTF, TOML, YAML, OGG, PNG, KTX2) | No | Data, not code |
 | Mission and campaign YAML | No | Data |
 | Compiled content pack (`.dll` / `.so` implementing `IContentPack`) | Yes, unless exception granted | Linked directly against engine code |
-| fa-content bridge | GPL v3 (in this repo) | Ships as part of this project |
+| fa-content bridge | GPL v3 ([jomkz/fa-content](https://github.com/jomkz/fa-content)) | Separate repo; distributed independently |
 
 The compiled content pack case is the only friction point. Most mods are Lua + assets
 and are completely unaffected. For compiled packs, `IContentPack.h` will carry a
@@ -124,11 +124,35 @@ This is the central design decision that affects every other phase. **The engine
 never imports or calls `ft_lib` directly.** All asset access goes through an
 `IContentPack` interface.
 
+### Mods vs Plugins
+
+Content for Fighters Legacy comes in two forms.
+
+**Mods (Lua + assets)** are directories dropped into `mods/<name>/` containing a
+`manifest.toml` plus any combination of Lua AI scripts, glTF meshes, TOML flight model
+and weapon data, YAML missions and campaigns, OGG audio, and PNG / KTX2 textures. Lua
+scripts run in a restricted sandbox with no filesystem, network, or FFI access. Asset
+files are data. **Most user content — reskins, missions, new aircraft, custom campaigns
+— is a mod.** No C++ compiler required.
+
+**Plugins (compiled content packs)** are shared libraries (`.dll` / `.so` / `.dylib`)
+that implement the `IContentPack` interface. They execute as native code inside the
+engine process with the same privileges as the engine. GPL v3 applies to compiled plugins
+unless the `IContentPack.h` linking exception is granted (see [License](#license)).
+**Install compiled plugins only from authors whose source you can verify.**
+
+Use a plugin when a mod cannot do the job: translating a proprietary binary format,
+calling a native codec library, or performing work that Lua + asset files cannot express.
+The [fa-content](https://github.com/jomkz/fa-content) plugin is the canonical reference
+implementation.
+
 ### IContentPack Interface
 
 ```
 engine/content/IContentPack.h
     name(), version(), priority()
+    init()              → Status { Ready | NeedsConfiguration }
+    configure(IWindow*) → bool        // plugin owns all discovery UI; engine calls this when init() returns NeedsConfiguration
     hasAsset(name, AssetType) → bool
     loadMesh(name)        → MeshData     (glTF-compatible vertex/index buffers)
     loadTexture(name)     → TextureData  (RGBA or BC-compressed)
@@ -159,7 +183,6 @@ id          = "fa-content"
 version     = "1.0.0"
 engine-api  = "1.0"      # minimum engine API version required; shows warning if newer
 priority    = 100        # higher = loads first; user mods typically 0–50
-requires-fa = true       # engine prompts for FA install path on first run
 
 # General mod dependency declaration; mod browser auto-installs missing deps
 depends     = []         # e.g. ["base-weapons-pack@1.2", "community-factions@0.5"]
@@ -228,8 +251,9 @@ mods/
 
 ### FA Content Bridge Plugin
 
-Located at `plugins/fa-content/` within this repo. Optional CMake target
-(`-DFL_FA_CONTENT=ON`). Implements `IContentPack` using `ft_lib`:
+Lives in the standalone [jomkz/fa-content](https://github.com/jomkz/fa-content) repository.
+Built and distributed independently; installed into `mods/fa-content/` via the mod browser.
+Implements `IContentPack` using `ft_lib`:
 
 | Request | Translation |
 |---|---|
@@ -841,12 +865,9 @@ return { init = patrol }
 
 **A.1 Repo and CMake skeleton**
 - `CMakeLists.txt` root: C++20, cross-platform.
-- Subdirs: `engine/` (core), `platform/` (HAL), `plugins/` (content packs),
-  `tools/` (dev utilities), `tests/`.
-- Submodule: `external/fighters-toolkit`; link `ft_lib` (used only inside `plugins/fa-content/`).
+- Subdirs: `engine/` (core), `platform/` (HAL), `tools/` (dev utilities), `tests/`.
 - FetchContent / vcpkg: Vulkan SDK + MoltenVK, SDL3, OpenAL Soft, Catch2.
-- `plugins/fa-content/` additionally depends on FluidSynth + a GM soundfont for XMI
-  rendering; these are build dependencies of the FA bridge only, not the engine core.
+- The FA content bridge lives in [jomkz/fa-content](https://github.com/jomkz/fa-content) and is not a submodule of this repo. The engine has zero build-time dependency on it.
 
 **A.2 Platform HAL interfaces**
 ```
@@ -913,19 +934,19 @@ The critical first impression for a player who has no mods installed.
 
 - Engine detects no content packs on startup and shows a **Welcome screen** instead of
   the main menu.
-- Welcome screen presents three paths, clearly labelled:
-  1. **"I own Fighters Anthology"** — walks the player through locating their FA
-     installation (auto-detects from registry / `FA_INSTALL_DIR`; shows a folder browser
-     if not found); downloads and installs the fa-content bridge from the community index;
-     launches into training on completion.
-  2. **"I don't own the game"** — opens the mod browser filtered to free base packs;
-     player installs a community content pack; launches into training on completion.
-  3. **"I'm a mod developer"** — skips content install; opens directly into sandbox mode
+- Welcome screen presents two paths:
+  1. **"Get started"** — opens the mod browser filtered to free base packs; player
+     installs a community content pack; launches into training on completion. This is the
+     primary path for all new players.
+  2. **"I'm a mod developer"** — skips content install; opens directly into sandbox mode
      with an empty map and the in-game mission editor active; shows a link to modding docs.
 - After first-run completes, the Welcome screen never appears again (flag in
   `config/user.toml`). Players can re-run it from Settings → Content.
-- If FA is detected automatically (registry key present), path 1 is pre-selected and the
-  folder step is skipped; one-click install proceeds immediately.
+- Players who own Fighters Anthology install the [fa-content](https://github.com/jomkz/fa-content)
+  plugin through the mod browser like any other content pack. When loaded, the plugin calls
+  `init()` and returns `NeedsConfiguration` if no FA installation has been located; the
+  engine responds by calling `configure()`, which the plugin uses to run its own discovery
+  flow (env var / registry / folder browser). No FA-specific logic exists in the engine.
 
 **A.8 Localization infrastructure**
 Ship i18n support from day one so community translations can land without engine changes.
@@ -1001,14 +1022,19 @@ turned down for stream/recording setups. All sliders save immediately on change.
 
 ### Workstream B — FA Content Bridge Plugin
 
-**B.1 Plugin skeleton**
-- `plugins/fa-content/CMakeLists.txt`: optional target, `-DFL_FA_CONTENT=ON`.
-- Implements `IContentPack`; links `ft_lib`.
-- Manifest: `plugins/fa-content/manifest.toml` with `requires-fa = true`.
+> Work tracked in [jomkz/fa-content](https://github.com/jomkz/fa-content). File paths below are relative to that repo's root.
 
-**B.2 FA install discovery**
-- Read `FA_INSTALL_DIR` env var or registry key; prompt dialog via SDL3 if absent.
+**B.1 Plugin skeleton**
+- `CMakeLists.txt`: builds the plugin shared library; links `ft_lib`.
+- Implements `IContentPack` including `init()` / `configure()`.
+- Manifest: `manifest.toml` with `id = "fa-content"`, `priority = 100`.
+
+**B.2 FA install discovery (inside `configure()`)**
+- Read `FA_INSTALL_DIR` env var or registry key; show a folder browser dialog via the
+  `IWindow*` passed to `configure()` if not found.
 - Mount all FA LIB archives via `ft_lib ealib`; store as internal state.
+- `init()` returns `NeedsConfiguration` until a valid FA path has been confirmed;
+  returns `Ready` on all subsequent launches once the path is persisted.
 
 **B.3 Asset translation layer**
 Implement each `IContentPack` method. Priority order:
