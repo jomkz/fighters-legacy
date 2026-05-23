@@ -7,12 +7,12 @@
 ```bash
 sudo dnf install cmake ninja-build gcc g++ clang clang-tools-extra \
   vulkan-devel SDL3-devel openal-soft-devel lcov \
-  libasan libubsan shaderc-utils
+  libasan libubsan glslang
 ```
 
 `libasan` and `libubsan` are required for the `asan` build preset (`-fsanitize=address,undefined`). They are separate packages from `gcc` on Fedora.
 
-`shaderc-utils` provides `glslc`, the GLSL-to-SPIR-V compiler used to build the Vulkan renderer shaders at CMake configure time.
+`glslang` provides `glslangValidator`, the GLSL-to-SPIR-V compiler used to build the Vulkan renderer shaders at CMake configure time.
 
 ### Linux — Ubuntu/Debian
 
@@ -22,7 +22,7 @@ sudo apt-get install -y cmake ninja-build gcc g++ clang clang-format \
   libvulkan-dev libsdl3-dev libopenal-dev lcov glslang-tools
 ```
 
-`glslang-tools` provides `glslc` for Vulkan shader compilation.
+`glslang-tools` provides `glslangValidator` for Vulkan shader compilation.
 
 > **Note:** SDL3 and OpenAL Soft may need building from source on older distros if the packaged versions are below the required minimum. Check `cmake/dependencies.cmake` (added in Phase 1) for version requirements.
 

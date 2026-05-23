@@ -10,10 +10,11 @@ if(NOT SDL3_FOUND)
 endif()
 
 # Compile shaders at build time
-find_program(GLSLC glslc
+# glslangValidator is provided by: glslang-tools (Ubuntu), glslang (Homebrew), LunarG SDK (Windows)
+find_program(GLSLANG_VALIDATOR glslangValidator
     HINTS "$ENV{VULKAN_SDK}/bin" "${Vulkan_INCLUDE_DIR}/../bin")
-if(NOT GLSLC)
-    message(FATAL_ERROR "glslc not found — install the Vulkan SDK")
+if(NOT GLSLANG_VALIDATOR)
+    message(FATAL_ERROR "glslangValidator not found — install glslang-tools (Ubuntu), glslang (macOS), or the Vulkan SDK (Windows)")
 endif()
 
 set(SHADER_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
@@ -21,13 +22,13 @@ set(SHADER_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 
 add_custom_command(
     OUTPUT  "${SHADER_OUT_DIR}/triangle.vert.spv"
-    COMMAND ${GLSLC} "${SHADER_SRC_DIR}/triangle.vert" -o "${SHADER_OUT_DIR}/triangle.vert.spv"
+    COMMAND ${GLSLANG_VALIDATOR} -V "${SHADER_SRC_DIR}/triangle.vert" -o "${SHADER_OUT_DIR}/triangle.vert.spv"
     DEPENDS "${SHADER_SRC_DIR}/triangle.vert"
 )
 
 add_custom_command(
     OUTPUT  "${SHADER_OUT_DIR}/triangle.frag.spv"
-    COMMAND ${GLSLC} "${SHADER_SRC_DIR}/triangle.frag" -o "${SHADER_OUT_DIR}/triangle.frag.spv"
+    COMMAND ${GLSLANG_VALIDATOR} -V "${SHADER_SRC_DIR}/triangle.frag" -o "${SHADER_OUT_DIR}/triangle.frag.spv"
     DEPENDS "${SHADER_SRC_DIR}/triangle.frag"
 )
 
