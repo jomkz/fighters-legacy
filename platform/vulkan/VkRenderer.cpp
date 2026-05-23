@@ -154,13 +154,13 @@ void VkRenderer::endFrame() {
     si.commandBufferCount = 1;
     si.pCommandBuffers = &m_commandBuffers[m_currentFrame];
     si.signalSemaphoreCount = 1;
-    si.pSignalSemaphores = &m_renderFinished[m_currentFrame];
+    si.pSignalSemaphores = &m_renderFinished[m_currentImageIndex];
     vkQueueSubmit(m_graphicsQueue, 1, &si, m_inFlightFences[m_currentFrame]);
 
     VkPresentInfoKHR pi{};
     pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     pi.waitSemaphoreCount = 1;
-    pi.pWaitSemaphores = &m_renderFinished[m_currentFrame];
+    pi.pWaitSemaphores = &m_renderFinished[m_currentImageIndex];
     pi.swapchainCount = 1;
     pi.pSwapchains = &m_swapchain;
     pi.pImageIndices = &m_currentImageIndex;
@@ -192,11 +192,13 @@ void VkRenderer::shutdown() {
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         if (m_imageAvailable[i] != VK_NULL_HANDLE)
             vkDestroySemaphore(m_device, m_imageAvailable[i], nullptr);
-        if (m_renderFinished[i] != VK_NULL_HANDLE)
-            vkDestroySemaphore(m_device, m_renderFinished[i], nullptr);
         if (m_inFlightFences[i] != VK_NULL_HANDLE)
             vkDestroyFence(m_device, m_inFlightFences[i], nullptr);
     }
+    for (auto sem : m_renderFinished)
+        if (sem != VK_NULL_HANDLE)
+            vkDestroySemaphore(m_device, sem, nullptr);
+    m_renderFinished.clear();
 
     if (m_commandPool != VK_NULL_HANDLE)
         vkDestroyCommandPool(m_device, m_commandPool, nullptr);
@@ -832,8 +834,15 @@ bool VkRenderer::createSyncObjects() {
 
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         if (vkCreateSemaphore(m_device, &sci, nullptr, &m_imageAvailable[i]) != VK_SUCCESS ||
-            vkCreateSemaphore(m_device, &sci, nullptr, &m_renderFinished[i]) != VK_SUCCESS ||
             vkCreateFence(m_device, &fci, nullptr, &m_inFlightFences[i]) != VK_SUCCESS) {
+            m_lastError = "sync object creation failed";
+            return false;
+        }
+    }
+
+    m_renderFinished.resize(m_swapchainImages.size());
+    for (auto& sem : m_renderFinished) {
+        if (vkCreateSemaphore(m_device, &sci, nullptr, &sem) != VK_SUCCESS) {
             m_lastError = "sync object creation failed";
             return false;
         }
@@ -935,6 +944,21 @@ void VkRenderer::recreateSwapchain() {
     // New swapchain is live in m_swapchain; now safe to destroy the old one.
     if (old != VK_NULL_HANDLE)
         vkDestroySwapchainKHR(m_device, old, nullptr);
+
+    // Recreate per-image renderFinished semaphores only if the image count changed.
+    // vkDeviceWaitIdle above ensures no semaphore is in use before we destroy any.
+    if (m_renderFinished.size() != m_swapchainImages.size()) {
+        for (auto sem : m_renderFinished)
+            if (sem != VK_NULL_HANDLE)
+                vkDestroySemaphore(m_device, sem, nullptr);
+        m_renderFinished.clear();
+        VkSemaphoreCreateInfo sci{};
+        sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        m_renderFinished.resize(m_swapchainImages.size());
+        for (auto& sem : m_renderFinished)
+            if (vkCreateSemaphore(m_device, &sci, nullptr, &sem) != VK_SUCCESS)
+                return;
+    }
 
     if (!createImageViews() || !createFramebuffers())
         return;

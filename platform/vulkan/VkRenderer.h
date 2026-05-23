@@ -78,7 +78,7 @@ class VkRenderer : public IRenderer {
 
     // Synchronisation
     std::array<VkSemaphore, MAX_FRAMES_IN_FLIGHT> m_imageAvailable{};
-    std::array<VkSemaphore, MAX_FRAMES_IN_FLIGHT> m_renderFinished{};
+    std::vector<VkSemaphore> m_renderFinished;
     std::array<VkFence, MAX_FRAMES_IN_FLIGHT> m_inFlightFences{};
     std::vector<VkFence> m_imagesInFlight;
 
