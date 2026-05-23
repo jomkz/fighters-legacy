@@ -60,6 +60,7 @@ enum class GamepadAxis : uint8_t {
 // Register with IInput::startTextInput to receive text events from the OS IME
 // pipeline. This is separate from isKeyDown — use it for any UI that accepts
 // free-form text (player name, chat, mission editor fields).
+// Threading: callbacks are invoked from the main thread inside IWindow::pollEvents().
 class ITextInputHandler {
 public:
     virtual ~ITextInputHandler() = default;
@@ -72,6 +73,7 @@ public:
     virtual void onTextEdit(const char* composition, int cursorPos) = 0;
 };
 
+// Threading: all methods must be called from the main thread.
 class IInput {
 public:
     virtual ~IInput() = default;

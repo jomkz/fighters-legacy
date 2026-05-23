@@ -8,6 +8,7 @@ class IWindow;
 
 // Phase 1 lifecycle interface only. Scene submission (mesh handles, transforms,
 // materials, render graph) is added in the Vulkan backend workstream.
+// Threading: all methods must be called from the main thread.
 class IRenderer {
 public:
     virtual ~IRenderer() = default;

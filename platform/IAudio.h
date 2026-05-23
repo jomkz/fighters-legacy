@@ -7,6 +7,8 @@
 using AudioBufferId = uint32_t;
 using AudioSourceId = uint32_t;
 
+// Threading: all methods must be called from the main thread. The OpenAL driver
+// manages its own internal mixing thread; callers do not need to synchronise.
 class IAudio {
 public:
     virtual ~IAudio() = default;

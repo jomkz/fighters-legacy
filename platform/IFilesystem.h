@@ -20,6 +20,7 @@ enum class SeekOrigin : uint8_t {
     End
 };
 
+// Threading: all methods must be called from the main thread.
 // IMPORTANT: This is a synchronous, blocking interface. readFile will not return
 // until the OS delivers the data. It is correct for startup asset loading, mod
 // discovery, and config reads. Do NOT call it on the main thread for per-frame

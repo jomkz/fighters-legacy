@@ -3,6 +3,7 @@
 
 #include "IWindowEventHandler.h"
 
+// Threading: all methods must be called from the main thread.
 class IWindow {
 public:
     virtual ~IWindow() = default;

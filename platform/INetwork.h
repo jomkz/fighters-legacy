@@ -6,6 +6,7 @@
 
 // Implement this interface and register it with INetwork::setEventHandler.
 // The backend calls these methods from INetwork::service() as events arrive.
+// Threading: callbacks are invoked from whichever thread calls INetwork::service().
 class INetworkEventHandler {
 public:
     virtual ~INetworkEventHandler() = default;
@@ -22,6 +23,8 @@ enum class PeerState : uint8_t {
     Disconnected
 };
 
+// Threading: all methods must be called from the same thread (typically the main
+// thread). service() is called once per frame from the game loop.
 class INetwork {
 public:
     virtual ~INetwork() = default;

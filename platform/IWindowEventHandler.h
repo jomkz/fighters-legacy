@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+// Threading: callbacks are invoked from the main thread inside IWindow::pollEvents().
 class IWindowEventHandler {
 public:
     virtual ~IWindowEventHandler() = default;

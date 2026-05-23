@@ -14,6 +14,8 @@ enum class LogLevel : uint8_t {
 // macOS, stderr/journald on Linux). Engine code should call this through a thin
 // macro wrapper defined in engine/ that injects __FILE__ and __LINE__ and
 // formats the message into a stack buffer (no heap allocation at call sites).
+// Threading: log() must be thread-safe; it may be called simultaneously from the
+// main thread, audio thread, and network thread. All other methods are main-thread only.
 class ILogger {
 public:
     virtual ~ILogger() = default;
