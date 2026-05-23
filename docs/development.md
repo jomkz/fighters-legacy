@@ -119,6 +119,22 @@ chmod +x .git/hooks/commit-msg
 
 The hook appends `Signed-off-by: Your Name <your@email>` if the line is not already present, so you never accidentally trigger a DCO failure.
 
+### clang-format (pre-commit)
+
+CI enforces clang-format on every changed C/C++ file. Install the pre-commit hook to auto-format staged files before each commit so the check never fails in CI:
+
+```bash
+cp scripts/hooks/pre-commit .git/hooks/
+chmod +x .git/hooks/pre-commit
+```
+
+To install both hooks at once:
+
+```bash
+cp scripts/hooks/commit-msg scripts/hooks/pre-commit .git/hooks/
+chmod +x .git/hooks/commit-msg .git/hooks/pre-commit
+```
+
 ---
 
 ## IDE setup
