@@ -44,6 +44,8 @@ pip install reuse
 
 Run with `reuse lint` from the repo root.
 
+Copyright is declared centrally in `REUSE.toml` rather than in each file. All `.h` and `.cpp` files are covered by a glob annotation there — new source files do not need an in-file `SPDX-FileCopyrightText` line. The `// SPDX-License-Identifier: GPL-3.0-or-later` line in each source file is still required (see `CLAUDE.md`).
+
 ---
 
 ## Building
