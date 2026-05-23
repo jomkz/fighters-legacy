@@ -1,0 +1,50 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+
+using AudioBufferId = uint32_t;
+using AudioSourceId = uint32_t;
+
+class IAudio {
+public:
+    virtual ~IAudio() = default;
+
+    virtual bool init() = 0;
+    virtual void shutdown() = 0;
+
+    // --- Buffer management ---
+
+    // Uploads raw PCM data and returns an opaque buffer handle, or 0 on failure.
+    virtual AudioBufferId uploadBuffer(const void* data, std::size_t size,
+                                       int sampleRate, int channels) = 0;
+    virtual void freeBuffer(AudioBufferId id) = 0;
+
+    // --- Source management ---
+
+    // Creates a 3D point emitter and returns an opaque source handle, or 0 on failure.
+    virtual AudioSourceId createSource() = 0;
+    virtual void destroySource(AudioSourceId source) = 0;
+
+    virtual void play(AudioSourceId source, AudioBufferId buffer) = 0;
+    virtual void stop(AudioSourceId source) = 0;
+    virtual bool isPlaying(AudioSourceId source) const = 0;
+
+    virtual void setLooping(AudioSourceId source, bool loop) = 0;
+    virtual void setPitch(AudioSourceId source, float pitch) = 0;
+    virtual void setGain(AudioSourceId source, float gain) = 0;
+
+    // --- 3D spatial audio ---
+
+    virtual void setPosition(AudioSourceId source, float x, float y, float z) = 0;
+
+    // Used by OpenAL for Doppler shift; aircraft velocity changes perceived pitch.
+    virtual void setVelocity(AudioSourceId source, float vx, float vy, float vz) = 0;
+
+    // Sets the listener (camera/player) position and orientation.
+    // pos, forward, up are each three-element float arrays [x, y, z].
+    virtual void setListenerTransform(const float pos[3],
+                                      const float forward[3],
+                                      const float up[3]) = 0;
+};
