@@ -33,10 +33,10 @@
 // C++ destroys members in reverse declaration order, so logger is declared
 // first here to ensure it outlives every other interface during shutdown.
 struct Platform {
-    std::unique_ptr<ILogger>            logger; // first declared → last destroyed
-    std::unique_ptr<IFilesystem>        filesystem;
+    std::unique_ptr<ILogger> logger; // first declared → last destroyed
+    std::unique_ptr<IFilesystem> filesystem;
     std::unique_ptr<IFilesystemWatcher> filesystemWatcher; // null in campaign / headless mode
-    std::unique_ptr<IWindow>            window;
+    std::unique_ptr<IWindow> window;
     std::unique_ptr<IRenderer> renderer;
     std::unique_ptr<IAudio> audio;
     std::unique_ptr<IInput> input;
