@@ -176,5 +176,10 @@ class IInput {
 
     virtual int getGamepadCount() const = 0;
     virtual bool isGamepadButtonDown(int gamepadId, GamepadButton button) const = 0;
+    virtual bool isGamepadButtonJustPressed(int gamepadId, GamepadButton button) const = 0;
     virtual float getGamepadAxis(int gamepadId, GamepadAxis axis) const = 0;
+
+    // Values 0.0–1.0; backend scales to hardware range. No-op if controller lacks rumble.
+    virtual void rumble(int gamepadId, float lowFreq, float highFreq, uint32_t durationMs) = 0;
+    virtual void rumbleTriggers(int gamepadId, float leftRumble, float rightRumble, uint32_t durationMs) = 0;
 };

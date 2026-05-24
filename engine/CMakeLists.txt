@@ -13,3 +13,15 @@ target_link_libraries(engine-content
     PUBLIC  platform-hal
     PRIVATE tomlplusplus::tomlplusplus
 )
+
+add_library(engine-input STATIC
+    input/InputBindings.cpp
+    input/AxisConfig.cpp
+)
+
+target_include_directories(engine-input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(engine-input
+    PUBLIC  platform-hal
+    PRIVATE tomlplusplus::tomlplusplus
+)

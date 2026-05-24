@@ -9,7 +9,7 @@
 #include <SDL3/SDL.h>
 
 bool SDL3Window::init(const char* title, int width, int height) {
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         m_lastError = SDL_GetError();
         return false;
     }
@@ -40,6 +40,8 @@ void SDL3Window::shutdown() {
 void SDL3Window::pollEvents() {
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
+        if (m_inputSink)
+            m_inputSink->onSDLEvent(ev);
         switch (ev.type) {
         case SDL_EVENT_QUIT:
             m_shouldClose = true;

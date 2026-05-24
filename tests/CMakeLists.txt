@@ -10,3 +10,7 @@ include(Catch)
 add_executable(test_content_system test_content_system.cpp)
 target_link_libraries(test_content_system PRIVATE Catch2::Catch2WithMain engine-content)
 catch_discover_tests(test_content_system)
+
+add_executable(test_input test_input.cpp)
+target_link_libraries(test_input PRIVATE Catch2::Catch2WithMain engine-input)
+catch_discover_tests(test_input)
