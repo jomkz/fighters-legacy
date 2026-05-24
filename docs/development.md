@@ -308,6 +308,51 @@ cmake --build --preset debug --target fl-server
 
 ---
 
+## fl-client
+
+`fl-client` is a headless developer test tool for smoke-testing the full
+client/server lifecycle locally. It connects to a running `fl-server`, sends
+periodic ping packets, then disconnects cleanly.
+
+### Build
+
+```bash
+cmake --preset debug
+cmake --build --preset debug --target fl-client
+# Binary: build/debug/tools/fl-client
+```
+
+### Usage
+
+```bash
+fl-client [host] [port] [--count N] [--interval MS]
+```
+
+| Argument | Default | Purpose |
+|---|---|---|
+| `host` | `127.0.0.1` | Server hostname or IP |
+| `port` | `4778` | Server port |
+| `--count N` / `-n N` | unlimited | Send N packets then disconnect |
+| `--interval MS` | `1000` | Milliseconds between pings |
+
+Environment variables `FL_HOST` and `FL_PORT` set the defaults when the
+positional args are omitted.
+
+### End-to-end smoke test
+
+```bash
+# Terminal 1 — start server
+./build/debug/tools/fl-server 4778 4
+
+# Terminal 2 — send 5 pings at 500 ms intervals, then exit
+./build/debug/tools/fl-client 127.0.0.1 4778 --count 5 --interval 500
+```
+
+Expected server output: `peer 0 connected` → `peer 0 disconnected`.
+Expected client output: `connecting` → `connected` → pings → `disconnecting`.
+
+---
+
 ## Roadmap status
 
 To report phase completion against target dates:
