@@ -221,3 +221,124 @@ TEST_CASE("InputBindings deserialize returns false on invalid TOML", "[bindings]
     InputBindings b;
     CHECK_FALSE(b.deserialize("this is not valid toml }{"));
 }
+
+TEST_CASE("InputBindings deserialize returns false on unrecognised key name", "[bindings]") {
+    InputBindings b;
+    CHECK_FALSE(b.deserialize("[primary]\nPitchUp = { source = \"Keyboard\", id = \"NotAKey\" }\n"));
+}
+
+TEST_CASE("InputBindings deserialize ignores unknown action names", "[bindings]") {
+    InputBindings b;
+    CHECK(b.deserialize("[primary]\nUnknownAction = { source = \"Keyboard\", id = \"A\" }\n"));
+}
+
+// ---------------------------------------------------------------------------
+// InputBindings — serialization coverage for binding source types not in defaults
+// ---------------------------------------------------------------------------
+
+TEST_CASE("InputBindings roundtrips GamepadButton values not in defaults", "[bindings]") {
+    InputBindings b;
+    for (int i = 0; i < InputBindings::kActionCount; ++i) {
+        b.clear(static_cast<InputAction>(i));
+        b.clear(static_cast<InputAction>(i), true);
+    }
+    b.set(InputAction::RollLeft, {BindingSource::GamepadButton, static_cast<uint32_t>(GamepadButton::X), false});
+    b.set(InputAction::RollRight, {BindingSource::GamepadButton, static_cast<uint32_t>(GamepadButton::Y), false});
+    b.set(InputAction::YawLeft, {BindingSource::GamepadButton, static_cast<uint32_t>(GamepadButton::LeftStick), false});
+    b.set(InputAction::YawRight,
+          {BindingSource::GamepadButton, static_cast<uint32_t>(GamepadButton::RightStick), false});
+    b.set(InputAction::ViewUp, {BindingSource::GamepadButton, static_cast<uint32_t>(GamepadButton::DpadUp), false});
+    b.set(InputAction::ViewLeft, {BindingSource::GamepadButton, static_cast<uint32_t>(GamepadButton::DpadLeft), false});
+    b.set(InputAction::ViewRight,
+          {BindingSource::GamepadButton, static_cast<uint32_t>(GamepadButton::DpadRight), false});
+
+    InputBindings b2;
+    for (int i = 0; i < InputBindings::kActionCount; ++i) {
+        b2.clear(static_cast<InputAction>(i));
+        b2.clear(static_cast<InputAction>(i), true);
+    }
+    REQUIRE(b2.deserialize(b.serialize()));
+    CHECK(b2.get(InputAction::RollLeft).id == static_cast<uint32_t>(GamepadButton::X));
+    CHECK(b2.get(InputAction::RollRight).id == static_cast<uint32_t>(GamepadButton::Y));
+    CHECK(b2.get(InputAction::YawLeft).id == static_cast<uint32_t>(GamepadButton::LeftStick));
+    CHECK(b2.get(InputAction::YawRight).id == static_cast<uint32_t>(GamepadButton::RightStick));
+    CHECK(b2.get(InputAction::ViewUp).id == static_cast<uint32_t>(GamepadButton::DpadUp));
+    CHECK(b2.get(InputAction::ViewLeft).id == static_cast<uint32_t>(GamepadButton::DpadLeft));
+    CHECK(b2.get(InputAction::ViewRight).id == static_cast<uint32_t>(GamepadButton::DpadRight));
+}
+
+TEST_CASE("InputBindings roundtrips GamepadAxis RightY and TriggerRight with axisNegative", "[bindings]") {
+    InputBindings b;
+    b.set(InputAction::PitchAxis, {BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::RightY), false});
+    b.set(InputAction::RollAxis, {BindingSource::GamepadAxis, static_cast<uint32_t>(GamepadAxis::TriggerRight), true});
+
+    InputBindings b2;
+    REQUIRE(b2.deserialize(b.serialize()));
+    CHECK(b2.get(InputAction::PitchAxis).id == static_cast<uint32_t>(GamepadAxis::RightY));
+    CHECK(b2.get(InputAction::RollAxis).id == static_cast<uint32_t>(GamepadAxis::TriggerRight));
+    CHECK(b2.get(InputAction::RollAxis).axisNegative == true);
+}
+
+TEST_CASE("InputBindings roundtrips MouseButton Middle", "[bindings]") {
+    InputBindings b;
+    b.set(InputAction::FireMissile, {BindingSource::MouseButton, static_cast<uint32_t>(MouseButton::Middle), false});
+
+    InputBindings b2;
+    REQUIRE(b2.deserialize(b.serialize()));
+    CHECK(b2.get(InputAction::FireMissile).source == BindingSource::MouseButton);
+    CHECK(b2.get(InputAction::FireMissile).id == static_cast<uint32_t>(MouseButton::Middle));
+}
+
+TEST_CASE("InputBindings roundtrips keyboard keys not in default bindings", "[bindings]") {
+    InputBindings b;
+    for (int i = 0; i < InputBindings::kActionCount; ++i) {
+        b.clear(static_cast<InputAction>(i));
+        b.clear(static_cast<InputAction>(i), true);
+    }
+    b.set(InputAction::ViewUp, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F1), false});
+    b.set(InputAction::ViewDown, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F12), false});
+    b.set(InputAction::ViewLeft, {BindingSource::Keyboard, static_cast<uint32_t>(Key::LeftCtrl), false});
+    b.set(InputAction::ViewRight, {BindingSource::Keyboard, static_cast<uint32_t>(Key::RightAlt), false});
+    b.set(InputAction::LandingGear, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Enter), false});
+    b.set(InputAction::Flaps, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Backspace), false});
+    b.set(InputAction::Pause, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Insert), false});
+    b.set(InputAction::Menu, {BindingSource::Keyboard, static_cast<uint32_t>(Key::PageUp), false});
+
+    InputBindings b2;
+    for (int i = 0; i < InputBindings::kActionCount; ++i) {
+        b2.clear(static_cast<InputAction>(i));
+        b2.clear(static_cast<InputAction>(i), true);
+    }
+    REQUIRE(b2.deserialize(b.serialize()));
+    CHECK(b2.get(InputAction::ViewUp).id == static_cast<uint32_t>(Key::F1));
+    CHECK(b2.get(InputAction::ViewDown).id == static_cast<uint32_t>(Key::F12));
+    CHECK(b2.get(InputAction::ViewLeft).id == static_cast<uint32_t>(Key::LeftCtrl));
+    CHECK(b2.get(InputAction::ViewRight).id == static_cast<uint32_t>(Key::RightAlt));
+    CHECK(b2.get(InputAction::LandingGear).id == static_cast<uint32_t>(Key::Enter));
+    CHECK(b2.get(InputAction::Flaps).id == static_cast<uint32_t>(Key::Backspace));
+    CHECK(b2.get(InputAction::Pause).id == static_cast<uint32_t>(Key::Insert));
+    CHECK(b2.get(InputAction::Menu).id == static_cast<uint32_t>(Key::PageUp));
+}
+
+// ---------------------------------------------------------------------------
+// AxisConfig — overrange clamping
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AxisConfig clamps input beyond 1.0 to 1.0", "[axis_config]") {
+    AxisConfig cfg;
+    cfg.deadzone = 0.0f;
+    cfg.scale = 1.0f;
+    CHECK(cfg.apply(1.5f) == Catch::Approx(1.0f));
+    CHECK(cfg.apply(-1.5f) == Catch::Approx(-1.0f));
+}
+
+// ---------------------------------------------------------------------------
+// AxisConfigTable — absent section keeps defaults
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AxisConfigTable deserialize with no axis_config section keeps defaults", "[axis_config]") {
+    AxisConfigTable t;
+    t.get(GamepadAxis::LeftY).deadzone = 0.2f;
+    REQUIRE(t.deserialize("[other_section]\nfoo = 1\n"));
+    CHECK(t.get(GamepadAxis::LeftY).deadzone == Catch::Approx(0.2f));
+}
