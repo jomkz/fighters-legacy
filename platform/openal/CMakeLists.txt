@@ -1,5 +1,8 @@
 # OpenAL Soft audio backend — implements IAudio
-if(NOT OPENAL_FOUND AND NOT OpenAL_FOUND)
+# On Apple, find_package(OpenAL) finds the deprecated system OpenAL.framework
+# which provides <OpenAL/al.h>, not <AL/al.h>. Always use FetchContent on Apple
+# to ensure we get OpenAL Soft with the correct include layout.
+if(NOT (OPENAL_FOUND OR OpenAL_FOUND) OR APPLE)
     set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
     # Force static library: avoids .dll/.so deployment for tests and tools on all
     # platforms, especially Windows where the DLL would otherwise need to be
