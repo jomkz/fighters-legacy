@@ -9,7 +9,7 @@ if(NOT SDL3_FOUND)
     unset(CMAKE_COMPILE_WARNING_AS_ERROR)
 endif()
 
-add_library(platform-sdl3 STATIC SDL3Window.cpp)
+add_library(platform-sdl3 STATIC SDL3Window.cpp SDL3Input.cpp)
 target_link_libraries(platform-sdl3
     PUBLIC  platform-hal
     PRIVATE SDL3::SDL3

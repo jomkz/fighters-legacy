@@ -13,3 +13,11 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
         "${CMAKE_SOURCE_DIR}/platform/vulkan"
     )
 endif()
+
+if(TARGET platform-sdl3)
+    add_executable(input_test input_test/main.cpp)
+    target_link_libraries(input_test PRIVATE platform-sdl3 platform-hal SDL3::SDL3)
+    target_include_directories(input_test PRIVATE
+        "${CMAKE_SOURCE_DIR}/platform/sdl3"
+    )
+endif()

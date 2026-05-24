@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "IWindow.h"
+#include "SDL3EventSink.h"
 #include <string>
 
 struct SDL_Window;
@@ -17,9 +18,15 @@ class SDL3Window : public IWindow {
     void* nativeHandle() const override;
     const char* getLastError() const override;
 
+    // Wire up the input backend to receive SDL events during pollEvents().
+    void setInputSink(ISDL3EventSink* sink) {
+        m_inputSink = sink;
+    }
+
   private:
     SDL_Window* m_window{nullptr};
     IWindowEventHandler* m_handler{nullptr};
+    ISDL3EventSink* m_inputSink{nullptr};
     int m_width{0};
     int m_height{0};
     bool m_shouldClose{false};
