@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -23,7 +24,6 @@
 #include <vector>
 
 #if !defined(_WIN32)
-#include <csignal>
 #include <sys/types.h>
 #include <sys/utsname.h>
 #include <unistd.h>
