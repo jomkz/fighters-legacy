@@ -81,7 +81,7 @@ void CrashInfo::populateOS() {
     if (!prettyName.empty()) {
         std::snprintf(osInfo, sizeof(osInfo), "%s", prettyName.c_str());
     } else {
-        struct utsname uts{};
+        utsname uts{};
         uname(&uts);
         std::snprintf(osInfo, sizeof(osInfo), "%s %s", uts.sysname, uts.release);
     }

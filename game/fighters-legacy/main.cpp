@@ -5,8 +5,6 @@
 #include "config/UserConfig.h"
 #include "crash/CrashInfo.h"
 #include "crash/CrashReporter.h"
-#include "openal/OALAudio.h"
-#include "sdl3/SDL3Input.h"
 #include "sdl3/SDL3Window.h"
 #include "vulkan/VkRenderer.h"
 
@@ -86,7 +84,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Renderer, audio, input
+    // Renderer
     auto renderer = std::make_unique<VkRenderer>();
     p.renderer = std::move(renderer);
     if (!p.renderer->init(p.window.get())) {
@@ -95,11 +93,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    auto audio = std::make_unique<OALAudio>();
-    p.audio = std::move(audio);
-    if (!p.audio->init()) {
-        rawLogger->log(LogLevel::Warn, __FILE__, __LINE__, "audio init failed — continuing without audio");
-    }
+    // Audio and input are not wired in the Phase 1 stub (no game loop).
+    // TODO(Phase 2): instantiate OALAudio and SDL3Input here.
 
     // Step 9: GPU info → crash reporter
     crashReporter.setGpuInfo(p.renderer->gpuInfo());
@@ -118,7 +113,6 @@ int main(int argc, char** argv) {
 
     // Step 13: Clean shutdown
     p.renderer->shutdown();
-    p.audio->shutdown();
     p.window->shutdown();
     crashReporter.shutdown();
     return 0;
