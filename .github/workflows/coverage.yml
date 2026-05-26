@@ -54,6 +54,7 @@ jobs:
                '*/tests/*' \
                '*/vendor/*' \
                '*/_deps/*' \
+               '*/catch2/*' \
                '*/platform/*' \
                '*/tools/*' \
                '*/game/*' \
@@ -67,6 +68,7 @@ jobs:
                   --output-directory coverage-report \
                   --branch-coverage \
                   --legend \
+                  --ignore-errors source \
                   --title "fighters-legacy coverage"
 
       - name: Upload HTML coverage report
