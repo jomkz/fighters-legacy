@@ -9,9 +9,9 @@ Each phase has a milestone with individual issues for every workstream task.
 |---|---|---|
 | 1 — Engine Foundation | 1–8 | None (start immediately) |
 | 2 — Modern-Particles Engine | 10–36 | HAL stable; fl-base-pack bootstrap started |
-| 4 — ft-gui Cross-Platform + Mission Editor | 26–38 | Phase 2 Vulkan HAL stable |
+| 4 — In-Game Mission Editor | 26–38 | Phase 2 Vulkan HAL stable |
 | 5 — Linux/macOS Release | ongoing → ~44 | All CI green; MoltenVK verified |
-| 6 — Native Formats & Modding | 36–50 | ft-gui extended; modding docs complete |
+| 6 — Native Formats & Modding | 36–50 | modding docs complete |
 
 Total estimated duration: **~48–56 weeks** of focused work.
 
@@ -69,9 +69,9 @@ Total estimated duration: **~48–56 weeks** of focused work.
 - Multiplayer: two clients on fl-server complete a cooperative strike mission.
 - CI green on all three platforms.
 
-### Phase 4 — ft-gui Cross-Platform
+### Phase 4 — In-Game Mission Editor
 
-- All editor panels work on Ubuntu and macOS.
+- In-game mission editor: create, edit, and save a YAML mission on all three platforms.
 - Round-trip: create a TOML aircraft + glTF mesh; load it in the engine.
 
 ### Phase 6 — Native Formats & Modding

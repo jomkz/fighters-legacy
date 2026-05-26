@@ -100,7 +100,6 @@ These decisions are finalized and not subject to revision without an RFC.
 | Network transport | ENet 1.3.x (reliable UDP) | Reliable + unreliable channels; congestion control; cross-platform. **IPv4 only** — ENet 1.3.x does not support IPv6; dual-stack requires the `enet6` fork (SirLynix/enet6), which is not a Phase 1 concern. |
 | Build system | CMake 3.25+ | Cross-platform from day one |
 | Engine repo | `fighters-legacy` (this repo) | Separate from fighters-toolkit |
-| ft-gui future | Port to SDL3 + Vulkan | After engine HAL is stable (Phase 4) |
 | Content system | Plugin / content-pack architecture | Each content source = one plugin; mods = other plugins; engine core has zero content dependency |
 | Native 3D models | glTF 2.0 | Royalty-free; Blender export; industry standard |
 | Native textures | PNG (source) + KTX2/DDS (GPU) | Mipmaps, BC compression; toolchain converts PNG → KTX2 at pack time |
