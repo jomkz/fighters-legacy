@@ -7,6 +7,7 @@
 #include "test_helpers.h"
 
 #include <csignal>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -294,4 +295,176 @@ TEST_CASE("CrashReporter: crash log rotation keeps at most 5", "[crash]") {
     }
     // Without a signal, no new dump is written, so all 6 remain (rotation happens inside writeCrashDump)
     CHECK(count == 6);
+}
+
+TEST_CASE("CrashInfo::populateOS fills osInfo with non-empty string", "[crash]") {
+    CrashInfo info{};
+    info.populateOS();
+    CHECK(std::string(info.osInfo).size() > 0);
+}
+
+TEST_CASE("CrashReporter: setMods stores mod entries", "[crash]") {
+    TempDir tmp;
+    MockWindow win;
+    TempDir logTmp;
+    FileLogger logger;
+    logger.open(logTmp.str(), 5);
+
+    CrashReporter cr;
+    CrashInfo info{};
+    info.engineVersion = "0.0.1";
+    cr.init({tmp.str(), "https://example.com", &logger, &win}, info);
+
+    CrashInfo::ModEntry mods[2];
+    std::strncpy(mods[0].id, "fa-content", sizeof(mods[0].id) - 1);
+    std::strncpy(mods[0].version, "1.0.0", sizeof(mods[0].version) - 1);
+    std::strncpy(mods[1].id, "extra-mod", sizeof(mods[1].id) - 1);
+    std::strncpy(mods[1].version, "2.1.0", sizeof(mods[1].version) - 1);
+    cr.setMods(mods, 2);
+
+    auto header = cr.formatCrashHeader(SIGSEGV);
+    CHECK(header.find("fa-content@1.0.0") != std::string::npos);
+    CHECK(header.find("extra-mod@2.1.0") != std::string::npos);
+    cr.shutdown();
+}
+
+TEST_CASE("CrashReporter: setMods with null pointer clears mods", "[crash]") {
+    TempDir tmp;
+    TempDir logTmp;
+    FileLogger logger;
+    logger.open(logTmp.str(), 5);
+
+    CrashReporter cr;
+    CrashInfo info{};
+    info.engineVersion = "0.0.1";
+    cr.init({tmp.str(), "https://example.com", &logger, nullptr}, info);
+
+    cr.setMods(nullptr, 0);
+    auto header = cr.formatCrashHeader(SIGSEGV);
+    CHECK(header.find("none") != std::string::npos);
+    cr.shutdown();
+}
+
+TEST_CASE("CrashReporter: setGpuInfo with null is safe", "[crash]") {
+    TempDir tmp;
+    TempDir logTmp;
+    FileLogger logger;
+    logger.open(logTmp.str(), 5);
+
+    CrashReporter cr;
+    CrashInfo info{};
+    info.engineVersion = "0.0.1";
+    cr.init({tmp.str(), "https://example.com", &logger, nullptr}, info);
+    REQUIRE_NOTHROW(cr.setGpuInfo(nullptr));
+    cr.shutdown();
+}
+
+TEST_CASE("CrashReporter: formatCrashHeader with no logger shows (none)", "[crash]") {
+    TempDir tmp;
+    CrashReporter cr;
+    CrashInfo info{};
+    info.engineVersion = "0.0.1";
+    cr.init({tmp.str(), "https://example.com", nullptr, nullptr}, info);
+
+    auto header = cr.formatCrashHeader(SIGSEGV);
+    CHECK(header.find("(none)") != std::string::npos);
+    cr.shutdown();
+}
+
+TEST_CASE("CrashReporter: checkPreviousCrash returns true with null window (headless)", "[crash]") {
+    TempDir tmp;
+    writeSentinel(tmp.path, 99999999);
+    CHECK(CrashReporter::checkPreviousCrash(tmp.str(), nullptr, nullptr, "https://example.com"));
+    // Sentinel should be cleaned up even in headless mode
+    CHECK_FALSE(fs::exists(tmp.path / "state" / "engine.lock"));
+}
+
+TEST_CASE("CrashReporter: checkPreviousCrash with dead PID and no crash log uses 2-button dialog", "[crash]") {
+    TempDir tmp;
+    MockWindow win;
+    win.buttonToReturn = 2; // Dismiss
+    writeSentinel(tmp.path, 99999999);
+    // No crash logs written → crashLogPath is empty → 2-button dialog
+    CHECK(CrashReporter::checkPreviousCrash(tmp.str(), &win, nullptr, "https://example.com"));
+    CHECK(win.lastTitle.find("Crash") != std::string::npos);
+    CHECK(win.lastUrl.empty()); // Dismiss chosen, no URL
+}
+
+TEST_CASE("CrashReporter: checkPreviousCrash Report with logger includes GitHub URL", "[crash]") {
+    TempDir tmp;
+    MockWindow win;
+    win.buttonToReturn = 1; // Report
+    TempDir logTmp;
+    FileLogger logger;
+    logger.open(logTmp.str(), 5);
+    logger.log(LogLevel::Info, "test.cpp", 1, "test log entry");
+    writeSentinel(tmp.path, 99999999);
+    writeCrashLog(tmp.path, "crash_2026-01-01_12-00-00.log");
+    CrashReporter::checkPreviousCrash(tmp.str(), &win, &logger, "https://github.com/x/y/issues/new");
+    CHECK(win.lastUrl.find("github.com") != std::string::npos);
+}
+
+TEST_CASE("CrashReporter: formatCrashHeader contains SIGILL", "[crash]") {
+    TempDir tmp;
+    TempDir logTmp;
+    FileLogger logger;
+    logger.open(logTmp.str(), 5);
+
+    CrashReporter cr;
+    CrashInfo info{};
+    info.engineVersion = "0.0.1";
+    cr.init({tmp.str(), "https://example.com", &logger, nullptr}, info);
+    auto header = cr.formatCrashHeader(SIGILL);
+    CHECK(header.find("SIGILL") != std::string::npos);
+    cr.shutdown();
+}
+
+TEST_CASE("CrashReporter: formatCrashHeader with unknown signal number", "[crash]") {
+    TempDir tmp;
+    TempDir logTmp;
+    FileLogger logger;
+    logger.open(logTmp.str(), 5);
+
+    CrashReporter cr;
+    CrashInfo info{};
+    info.engineVersion = "0.0.1";
+    cr.init({tmp.str(), "https://example.com", &logger, nullptr}, info);
+    auto header = cr.formatCrashHeader(99); // falls through to "SIG" + to_string(sig)
+    CHECK(header.find("SIG99") != std::string::npos);
+    cr.shutdown();
+}
+
+TEST_CASE("CrashReporter: formatCrashHeader with null engineVersion shows ?", "[crash]") {
+    TempDir tmp;
+    CrashReporter cr;
+    CrashInfo info{}; // engineVersion is null (zero-initialized)
+    cr.init({tmp.str(), "https://example.com", nullptr, nullptr}, info);
+    auto header = cr.formatCrashHeader(SIGSEGV);
+    CHECK(header.find("?") != std::string::npos);
+    cr.shutdown();
+}
+
+TEST_CASE("CrashReporter: checkPreviousCrash Report with null logger builds URL", "[crash]") {
+    TempDir tmp;
+    MockWindow win;
+    win.buttonToReturn = 1; // Report
+    writeSentinel(tmp.path, 99999999);
+    writeCrashLog(tmp.path, "crash_2026-01-01_12-00-02.log");
+    // null logger → buildGitHubUrl if(logger) FALSE branch
+    CrashReporter::checkPreviousCrash(tmp.str(), &win, nullptr, "https://github.com/x/y/issues/new");
+    CHECK(win.lastUrl.find("github.com") != std::string::npos);
+}
+
+TEST_CASE("CrashReporter: checkPreviousCrash Report with logger that has no entries", "[crash]") {
+    TempDir tmp;
+    MockWindow win;
+    win.buttonToReturn = 1; // Report
+    TempDir logTmp;
+    FileLogger logger;
+    logger.open(logTmp.str(), 5);
+    // No log entries → copyLastLines returns 0 → if(n>0) FALSE branch
+    writeSentinel(tmp.path, 99999999);
+    writeCrashLog(tmp.path, "crash_2026-01-01_12-00-03.log");
+    CrashReporter::checkPreviousCrash(tmp.str(), &win, &logger, "https://github.com/x/y/issues/new");
+    CHECK(win.lastUrl.find("github.com") != std::string::npos);
 }

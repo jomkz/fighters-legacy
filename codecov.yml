@@ -10,6 +10,7 @@ coverage:
 ignore:
   - "platform/**"
   - "tools/**"
+  - "tests/**"
 comment:
   layout: "reach,diff,flags,files"
   behavior: default

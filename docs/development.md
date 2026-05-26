@@ -104,18 +104,57 @@ Create a `CMakeUserPresets.json` in the repo root to override preset defaults lo
 
 ---
 
-## Code coverage (optional — CI handles this automatically)
+## Testing
+
+For running the test suite see [Building → Running tests](#running-tests).
+
+### Code coverage
+
+CI enforces the following gates on every push and pull request:
+
+| Scope | Metric | Threshold |
+|---|---|---|
+| `engine/` | Branch coverage | ≥ 80% (CI enforced) |
+| `engine/` | Line coverage | ≥ 70% (CI enforced) |
+
+`platform/` backends, `tools/`, and `game/` are excluded from coverage reporting. Branch
+coverage catches untested conditional paths and is the primary gate; line coverage is a
+secondary floor. `platform/` is excluded because platform divergence makes unit testing
+brittle. `game/` is excluded in Phase 1 — the binary is a stub with no game loop; its
+coverage gate will be added when Phase 2 game logic lands.
+
+Gates use `--exclude-throw-branches` (gcovr 8.x): GCC instruments every non-`noexcept`
+call site with an "exception throw" branch that is never taken in normal unit tests.
+Excluding these focuses the gate on meaningful decision branches (if/else, switch).
+
+An HTML coverage report is uploaded as a CI artifact on every run (retained 30 days).
+Access it from **Actions** → select a run → **Artifacts → coverage-report**.
+
+**Running coverage locally (Linux/macOS — requires GCC or Clang):**
 
 ```bash
 cmake --preset coverage
 cmake --build --preset coverage
 ctest --preset coverage --output-on-failure
-lcov --capture --directory . --output-file coverage.info
-lcov --remove coverage.info '/usr/*' '*/tests/*' '*/vendor/*' \
-     --output-file coverage.info
+
+# Capture and filter (engine/ only, with branch data; game/ excluded until Phase 2)
+lcov --capture --directory . --output-file coverage.raw \
+     --branch-coverage --ignore-errors empty,source,gcov,negative
+lcov --remove coverage.raw '/usr/*' '*/tests/*' '*/vendor/*' '*/_deps/*' \
+     '*/platform/*' '*/tools/*' '*/game/*' \
+     --output-file coverage.info \
+     --branch-coverage --ignore-errors empty,unused,source,gcov
+
+# Check gates (requires: pip install gcovr)
+gcovr --filter 'engine/' --exclude-throw-branches --fail-under-branch 80 --print-summary
+gcovr --filter 'engine/' --exclude-throw-branches --fail-under-line 70 --print-summary
+
+# Generate HTML report
+genhtml coverage.info --output-directory coverage-report --branch-coverage
+# Open coverage-report/index.html
 ```
 
-Codecov posts a PR coverage delta comment automatically. You do not need to run coverage locally unless you are investigating a specific threshold failure.
+Codecov also posts a PR coverage delta comment automatically.
 
 ---
 

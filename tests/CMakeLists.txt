@@ -62,3 +62,13 @@ if(TARGET platform-enet)
     )
     catch_discover_tests(test_network)
 endif()
+
+add_executable(test_audio test_audio.cpp)
+target_link_libraries(test_audio PRIVATE Catch2::Catch2WithMain platform-openal OpenAL::OpenAL)
+target_include_directories(test_audio PRIVATE "${CMAKE_SOURCE_DIR}/platform/openal")
+catch_discover_tests(test_audio)
+
+add_executable(test_sdl3 test_sdl3.cpp)
+target_link_libraries(test_sdl3 PRIVATE Catch2::Catch2WithMain platform-sdl3)
+target_include_directories(test_sdl3 PRIVATE "${CMAKE_SOURCE_DIR}/platform/sdl3")
+catch_discover_tests(test_sdl3)

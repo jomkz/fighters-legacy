@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake lcov libx11-dev libxext-dev \
+          sudo apt-get install -y ninja-build cmake lcov python3-gcovr libx11-dev libxext-dev \
             libopenal-dev libvulkan-dev glslang-tools
 
       - name: Configure
@@ -39,12 +39,57 @@ jobs:
       - name: Test
         run: ctest --preset coverage --output-on-failure
 
-      - name: Generate lcov report
+      - name: Capture coverage
         run: |
-          lcov --capture --directory . --output-file coverage.info \
+          lcov --capture --directory . \
+               --output-file coverage.raw \
+               --branch-coverage \
                --ignore-errors empty,source,gcov,negative
-          lcov --remove coverage.info '/usr/*' '*/tests/*' '*/vendor/*' '*/_deps/*' '*/game/*' \
-               --output-file coverage.info --ignore-errors empty,unused,source,gcov
+
+      - name: Filter coverage
+        run: |
+          lcov --remove coverage.raw \
+               '/usr/*' \
+               '*/tests/*' \
+               '*/vendor/*' \
+               '*/_deps/*' \
+               '*/platform/*' \
+               '*/tools/*' \
+               '*/game/*' \
+               --output-file coverage.info \
+               --branch-coverage \
+               --ignore-errors empty,unused,source,gcov
+
+      - name: Generate HTML report
+        run: |
+          genhtml coverage.info \
+                  --output-directory coverage-report \
+                  --branch-coverage \
+                  --legend \
+                  --title "fighters-legacy coverage"
+
+      - name: Upload HTML coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage-report/
+          retention-days: 30
+
+      - name: Enforce branch coverage gate — engine/ >= 80%
+        run: |
+          gcovr \
+            --filter 'engine/' \
+            --exclude-throw-branches \
+            --fail-under-branch 80 \
+            --print-summary
+
+      - name: Enforce line coverage gate — engine/ >= 70%
+        run: |
+          gcovr \
+            --filter 'engine/' \
+            --exclude-throw-branches \
+            --fail-under-line 70 \
+            --print-summary
 
       - name: Upload to Codecov
         uses: codecov/codecov-action@v6
