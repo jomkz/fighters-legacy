@@ -7,7 +7,6 @@
 #include "test_helpers.h"
 
 #include <csignal>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -316,10 +315,10 @@ TEST_CASE("CrashReporter: setMods stores mod entries", "[crash]") {
     cr.init({tmp.str(), "https://example.com", &logger, &win}, info);
 
     CrashInfo::ModEntry mods[2];
-    std::strncpy(mods[0].id, "fa-content", sizeof(mods[0].id) - 1);
-    std::strncpy(mods[0].version, "1.0.0", sizeof(mods[0].version) - 1);
-    std::strncpy(mods[1].id, "extra-mod", sizeof(mods[1].id) - 1);
-    std::strncpy(mods[1].version, "2.1.0", sizeof(mods[1].version) - 1);
+    std::snprintf(mods[0].id, sizeof(mods[0].id), "%s", "fa-content");
+    std::snprintf(mods[0].version, sizeof(mods[0].version), "%s", "1.0.0");
+    std::snprintf(mods[1].id, sizeof(mods[1].id), "%s", "extra-mod");
+    std::snprintf(mods[1].version, sizeof(mods[1].version), "%s", "2.1.0");
     cr.setMods(mods, 2);
 
     auto header = cr.formatCrashHeader(SIGSEGV);
