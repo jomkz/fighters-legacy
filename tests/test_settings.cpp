@@ -443,3 +443,75 @@ TEST_CASE("Settings: audio defaults match spec (80/100/70/100/100)", "[settings]
     CHECK(a.voiceChatVolume == Catch::Approx(1.00f));
     CHECK(a.rwrVolume == Catch::Approx(1.00f));
 }
+
+// ---------------------------------------------------------------------------
+// DrawDistance Medium and High round-trips (previously untested enum arms)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Settings: DrawDistance Medium round-trip", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    GraphicsSettings gs;
+    gs.drawDistance = DrawDistance::Medium;
+    makeAndSave(fs, logger, gs, {});
+    CHECK(reload(fs).graphics().drawDistance == DrawDistance::Medium);
+}
+
+TEST_CASE("Settings: DrawDistance High round-trip", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    GraphicsSettings gs;
+    gs.drawDistance = DrawDistance::High;
+    makeAndSave(fs, logger, gs, {});
+    CHECK(reload(fs).graphics().drawDistance == DrawDistance::High);
+}
+
+// ---------------------------------------------------------------------------
+// Error-path branches in load() and save()
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Settings: load returns false for invalid TOML", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "this is {{{ invalid toml");
+    UserConfig cfg(fs, logger);
+    REQUIRE_FALSE(cfg.load());
+    CHECK(logger.hasMessage(LogLevel::Warn, "failed to parse"));
+}
+
+TEST_CASE("Settings: load warns and defaults on unknown log_level string", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[engine]\nlog_level = \"bogus\"\n");
+    UserConfig cfg(fs, logger);
+    REQUIRE(cfg.load());
+    CHECK(cfg.logLevel() == LogLevel::Info);
+    CHECK(logger.hasMessage(LogLevel::Warn, "bogus"));
+}
+
+TEST_CASE("Settings: save returns false when createDirectory fails", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.createDirectoryResult = false;
+    UserConfig cfg(fs, logger);
+    REQUIRE_FALSE(cfg.save());
+    CHECK(logger.hasMessage(LogLevel::Warn, "failed to create config directory"));
+}
+
+TEST_CASE("Settings: save returns false when tmp file open fails", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.failWriteOpen = true;
+    UserConfig cfg(fs, logger);
+    REQUIRE_FALSE(cfg.save());
+    CHECK(logger.hasMessage(LogLevel::Warn, "failed to open tmp file"));
+}
+
+TEST_CASE("Settings: save returns false when rename fails", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.renameResult = false;
+    UserConfig cfg(fs, logger);
+    REQUIRE_FALSE(cfg.save());
+    CHECK(logger.hasMessage(LogLevel::Warn, "failed to rename tmp file"));
+}

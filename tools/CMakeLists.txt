@@ -15,10 +15,18 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
 endif()
 
 if(TARGET platform-sdl3)
-    add_executable(input_test input_test/main.cpp)
-    target_link_libraries(input_test PRIVATE platform-sdl3 platform-hal SDL3::SDL3)
-    target_include_directories(input_test PRIVATE
+    add_executable(input_check input_check/main.cpp)
+    target_link_libraries(input_check PRIVATE platform-sdl3 platform-hal SDL3::SDL3)
+    target_include_directories(input_check PRIVATE
         "${CMAKE_SOURCE_DIR}/platform/sdl3"
+    )
+endif()
+
+if(TARGET platform-openal)
+    add_executable(audio_check audio_check/main.cpp)
+    target_link_libraries(audio_check PRIVATE platform-openal OpenAL::OpenAL)
+    target_include_directories(audio_check PRIVATE
+        "${CMAKE_SOURCE_DIR}/platform/openal"
     )
 endif()
 

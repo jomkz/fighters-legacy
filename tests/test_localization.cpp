@@ -933,3 +933,215 @@ TEST_CASE("Localization: reload() re-runs last load(); before load() returns fal
     REQUIRE(loc.reload());
     REQUIRE(std::string(loc.get("strings.s.k")) == "updated");
 }
+
+// ---------------------------------------------------------------------------
+// loadLocaleDirImpl — additional branch coverage
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Localization: loadLocaleDirImpl skips isDirectory entry inside locale dir") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addDir("locale");
+    fs.addDirEntry("locale", "en", true);
+    fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
+    fs.addDirEntry("locale/en", "subdir", true); // isDirectory=true → continue
+    Localization loc(fs, logger);
+    REQUIRE(loc.load("en", {}));
+    REQUIRE(std::string(loc.get("ui.s.k")) == "v");
+}
+
+TEST_CASE("Localization: loadLocaleDirImpl skips file with name shorter than 6 chars") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addDir("locale");
+    fs.addDirEntry("locale", "en", true);
+    fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
+    fs.addFile("locale/en/ab.md", "short"); // name "ab.md" has size 5 < 6
+    fs.addDirEntry("locale/en", "ab.md", false);
+    Localization loc(fs, logger);
+    REQUIRE(loc.load("en", {}));
+    REQUIRE(std::string(loc.get("ui.s.k")) == "v");
+}
+
+TEST_CASE("Localization: loadLocaleDirImpl skips locale file that fails TOML parse") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addDir("locale");
+    fs.addDirEntry("locale", "en", true);
+    fs.addLocaleFile("locale/en/good.toml", "[s]\nk = \"v\"\n");
+    fs.addLocaleFile("locale/en/bad.toml", "this is {{{ invalid toml");
+    Localization loc(fs, logger);
+    // good.toml loads successfully; bad.toml fails → if(tmp.load()) FALSE branch
+    REQUIRE(loc.load("en", {}));
+    REQUIRE(std::string(loc.get("good.s.k")) == "v");
+}
+
+// ---------------------------------------------------------------------------
+// readMetaRTL — additional branch coverage
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Localization: isRTL is false when meta.toml has no rtl key") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addDir("locale");
+    fs.addDirEntry("locale", "en", true);
+    fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
+    fs.addLocaleFile("locale/en/meta.toml", "name = \"English\"\n"); // no rtl key
+    Localization loc(fs, logger);
+    loc.load("en", {});
+    REQUIRE(loc.isRTL() == false); // readMetaRTL returns false (no rtl key)
+}
+
+TEST_CASE("Localization: isRTL is false when meta.toml is empty") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addDir("locale");
+    fs.addDirEntry("locale", "en", true);
+    fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
+    fs.addLocaleFile("locale/en/meta.toml", ""); // empty file → sz==0 branch
+    Localization loc(fs, logger);
+    loc.load("en", {});
+    REQUIRE(loc.isRTL() == false);
+}
+
+TEST_CASE("Localization: isRTL is false when meta.toml has invalid TOML") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addDir("locale");
+    fs.addDirEntry("locale", "en", true);
+    fs.addLocaleFile("locale/en/ui.toml", "[s]\nk = \"v\"\n");
+    fs.addLocaleFile("locale/en/meta.toml", "invalid {{ toml }{"); // parse throws → catch branch
+    Localization loc(fs, logger);
+    loc.load("en", {});
+    REQUIRE(loc.isRTL() == false);
+}
+
+// ---------------------------------------------------------------------------
+// listLocales — additional branch coverage
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Localization: listLocales ignores file entries in base locale dir") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addDir("locale");
+    fs.addDirEntry("locale", "en", true);
+    fs.addDirEntry("locale", "README.md", false); // not a directory → isDirectory FALSE
+    Localization loc(fs, logger);
+    auto locales = loc.listLocales({});
+    REQUIRE(locales.size() == 1);
+    CHECK(locales[0].tag == "en");
+}
+
+TEST_CASE("Localization: listLocales includes locales contributed by mods") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addDir("locale");
+    fs.addDirEntry("locale", "en", true);
+
+    LocaleMockPack pack;
+    pack.root = "mods/testmod";
+    pack.prio = 50;
+    fs.addDir("mods/testmod/locale");
+    fs.addDirEntry("mods/testmod/locale", "ja", true);
+
+    Localization loc(fs, logger);
+    auto locales = loc.listLocales({&pack});
+    bool hasEn = false, hasJa = false;
+    for (auto& l : locales) {
+        if (l.tag == "en")
+            hasEn = true;
+        if (l.tag == "ja")
+            hasJa = true;
+    }
+    CHECK(hasEn);
+    CHECK(hasJa);
+}
+
+TEST_CASE("Localization: listLocales skips mod with null rootDirectory") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addDir("locale");
+    fs.addDirEntry("locale", "en", true);
+
+    LocaleMockPack nullRoot; // root is empty → rootDirectory() returns nullptr
+    Localization loc(fs, logger);
+    REQUIRE_NOTHROW(loc.listLocales({&nullRoot}));
+    auto locales = loc.listLocales({&nullRoot});
+    REQUIRE(locales.size() == 1);
+}
+
+TEST_CASE("Localization: listLocales uses tag as displayName when meta.toml has no name key") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addDir("locale");
+    fs.addDirEntry("locale", "fr", true);
+    fs.addLocaleFile("locale/fr/meta.toml", "rtl = false\n"); // rtl present, name absent
+    Localization loc(fs, logger);
+    auto locales = loc.listLocales({});
+    REQUIRE(locales.size() == 1);
+    CHECK(locales[0].displayName == "fr");
+    CHECK(locales[0].rtl == false);
+}
+
+TEST_CASE("Localization: listLocales with invalid meta.toml is safe") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addDir("locale");
+    fs.addDirEntry("locale", "xx", true);
+    fs.addLocaleFile("locale/xx/meta.toml", "totally invalid {{ toml }{"); // catch branch
+    Localization loc(fs, logger);
+    auto locales = loc.listLocales({});
+    REQUIRE(locales.size() == 1);
+    CHECK(locales[0].displayName == "xx"); // fell back to tag
+}
+
+TEST_CASE("Localization: listLocales with empty meta.toml uses tag as displayName") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addDir("locale");
+    fs.addDirEntry("locale", "en", true);
+    fs.addLocaleFile("locale/en/meta.toml", ""); // empty → sz==0 branch
+    Localization loc(fs, logger);
+    auto locales = loc.listLocales({});
+    REQUIRE(locales.size() == 1);
+    CHECK(locales[0].displayName == "en");
+}
+
+// ---------------------------------------------------------------------------
+// getCoverage / listMissingKeys — additional branch coverage
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Localization: getCoverage returns 1.0 when en has no locale files") {
+    MockFilesystem fs;
+    MockLogger logger;
+    // No locale files at all → enTable is empty → returns 1.0f
+    Localization loc(fs, logger);
+    REQUIRE(loc.getCoverage("fr", {}) == Catch::Approx(1.0f));
+}
+
+TEST_CASE("Localization: listMissingKeys returns empty when all keys are present in lang") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addDir("locale");
+    fs.addDirEntry("locale", "en", true);
+    fs.addLocaleFile("locale/en/ui.toml", "[s]\na = \"A\"\nb = \"B\"\n");
+    fs.addDirEntry("locale", "fr", true);
+    fs.addLocaleFile("locale/fr/ui.toml", "[s]\na = \"A_fr\"\nb = \"B_fr\"\n");
+    Localization loc(fs, logger);
+    auto missing = loc.listMissingKeys("fr", {});
+    REQUIRE(missing.empty());
+}
+
+TEST_CASE("Localization: listMissingKeys with null-rootDirectory mod does not crash") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addDir("locale");
+    fs.addDirEntry("locale", "en", true);
+    fs.addLocaleFile("locale/en/ui.toml", "[s]\na = \"A\"\n");
+    fs.addDirEntry("locale", "fr", true);
+    fs.addLocaleFile("locale/fr/ui.toml", "[s]\na = \"A_fr\"\n");
+
+    LocaleMockPack noRoot; // root is empty → rootDirectory() returns nullptr
+    Localization loc(fs, logger);
+    REQUIRE_NOTHROW(loc.listMissingKeys("fr", {&noRoot}));
+}

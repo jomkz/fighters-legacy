@@ -342,3 +342,151 @@ TEST_CASE("AxisConfigTable deserialize with no axis_config section keeps default
     REQUIRE(t.deserialize("[other_section]\nfoo = 1\n"));
     CHECK(t.get(GamepadAxis::LeftY).deadzone == Catch::Approx(0.2f));
 }
+
+// ---------------------------------------------------------------------------
+// InputBindings — comprehensive key name coverage
+// Exercises keyFromName / keyName branches for all keys not covered by
+// the default bindings or the earlier per-type roundtrip tests.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("InputBindings roundtrips all uncovered keyboard letter and digit keys", "[bindings]") {
+    InputBindings b;
+    for (int i = 0; i < InputBindings::kActionCount; ++i) {
+        b.clear(static_cast<InputAction>(i));
+        b.clear(static_cast<InputAction>(i), true);
+    }
+
+    // Primary: uncovered letter keys B C H I J K L M N O P R T U V X Y Z
+    b.set(InputAction::PitchAxis, {BindingSource::Keyboard, static_cast<uint32_t>(Key::B), false});
+    b.set(InputAction::RollAxis, {BindingSource::Keyboard, static_cast<uint32_t>(Key::C), false});
+    b.set(InputAction::YawAxis, {BindingSource::Keyboard, static_cast<uint32_t>(Key::H), false});
+    b.set(InputAction::ThrottleAxis, {BindingSource::Keyboard, static_cast<uint32_t>(Key::I), false});
+    b.set(InputAction::PitchUp, {BindingSource::Keyboard, static_cast<uint32_t>(Key::J), false});
+    b.set(InputAction::PitchDown, {BindingSource::Keyboard, static_cast<uint32_t>(Key::K), false});
+    b.set(InputAction::RollLeft, {BindingSource::Keyboard, static_cast<uint32_t>(Key::L), false});
+    b.set(InputAction::RollRight, {BindingSource::Keyboard, static_cast<uint32_t>(Key::M), false});
+    b.set(InputAction::YawLeft, {BindingSource::Keyboard, static_cast<uint32_t>(Key::N), false});
+    b.set(InputAction::YawRight, {BindingSource::Keyboard, static_cast<uint32_t>(Key::O), false});
+    b.set(InputAction::ThrottleUp, {BindingSource::Keyboard, static_cast<uint32_t>(Key::P), false});
+    b.set(InputAction::ThrottleDown, {BindingSource::Keyboard, static_cast<uint32_t>(Key::R), false});
+    b.set(InputAction::Airbrake, {BindingSource::Keyboard, static_cast<uint32_t>(Key::T), false});
+    b.set(InputAction::Afterburner, {BindingSource::Keyboard, static_cast<uint32_t>(Key::U), false});
+    b.set(InputAction::FireWeapon, {BindingSource::Keyboard, static_cast<uint32_t>(Key::V), false});
+    b.set(InputAction::FireMissile, {BindingSource::Keyboard, static_cast<uint32_t>(Key::X), false});
+    b.set(InputAction::NextWeapon, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Y), false});
+    b.set(InputAction::PrevWeapon, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Z), false});
+    // Digit keys 0, 3-9 (1 and 2 are in defaults)
+    b.set(InputAction::ViewUp, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Num0), false});
+    b.set(InputAction::ViewDown, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Num3), false});
+    b.set(InputAction::ViewLeft, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Num4), false});
+    b.set(InputAction::ViewRight, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Num5), false});
+    b.set(InputAction::LandingGear, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Num6), false});
+    b.set(InputAction::Flaps, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Num7), false});
+    b.set(InputAction::Pause, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Num8), false});
+    b.set(InputAction::Menu, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Num9), false});
+
+    // Alt: uncovered navigation / F-key / modifier keys
+    b.set(InputAction::PitchAxis, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Delete), false}, true);
+    b.set(InputAction::RollAxis, {BindingSource::Keyboard, static_cast<uint32_t>(Key::ArrowLeft), false}, true);
+    b.set(InputAction::YawAxis, {BindingSource::Keyboard, static_cast<uint32_t>(Key::ArrowRight), false}, true);
+    b.set(InputAction::ThrottleAxis, {BindingSource::Keyboard, static_cast<uint32_t>(Key::Home), false}, true);
+    b.set(InputAction::PitchUp, {BindingSource::Keyboard, static_cast<uint32_t>(Key::End), false}, true);
+    b.set(InputAction::PitchDown, {BindingSource::Keyboard, static_cast<uint32_t>(Key::PageDown), false}, true);
+    b.set(InputAction::RollLeft, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F2), false}, true);
+    b.set(InputAction::RollRight, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F3), false}, true);
+    b.set(InputAction::YawLeft, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F4), false}, true);
+    b.set(InputAction::YawRight, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F5), false}, true);
+    b.set(InputAction::ThrottleUp, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F6), false}, true);
+    b.set(InputAction::ThrottleDown, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F7), false}, true);
+    b.set(InputAction::Airbrake, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F8), false}, true);
+    b.set(InputAction::Afterburner, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F9), false}, true);
+    b.set(InputAction::FireWeapon, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F10), false}, true);
+    b.set(InputAction::FireMissile, {BindingSource::Keyboard, static_cast<uint32_t>(Key::F11), false}, true);
+    b.set(InputAction::NextWeapon, {BindingSource::Keyboard, static_cast<uint32_t>(Key::RightShift), false}, true);
+    b.set(InputAction::PrevWeapon, {BindingSource::Keyboard, static_cast<uint32_t>(Key::RightCtrl), false}, true);
+    b.set(InputAction::ViewUp, {BindingSource::Keyboard, static_cast<uint32_t>(Key::LeftAlt), false}, true);
+    // MouseButton Left and Right (also exercises mousButtonName / mousButtonFromName)
+    b.set(InputAction::ViewLeft, {BindingSource::MouseButton, static_cast<uint32_t>(MouseButton::Left), false}, true);
+    b.set(InputAction::ViewRight, {BindingSource::MouseButton, static_cast<uint32_t>(MouseButton::Right), false}, true);
+
+    InputBindings b2;
+    for (int i = 0; i < InputBindings::kActionCount; ++i) {
+        b2.clear(static_cast<InputAction>(i));
+        b2.clear(static_cast<InputAction>(i), true);
+    }
+    REQUIRE(b2.deserialize(b.serialize()));
+
+    // Spot-check a sample of the round-tripped bindings
+    CHECK(b2.get(InputAction::PitchAxis).id == static_cast<uint32_t>(Key::B));
+    CHECK(b2.get(InputAction::ThrottleUp).id == static_cast<uint32_t>(Key::P));
+    CHECK(b2.get(InputAction::Menu).id == static_cast<uint32_t>(Key::Num9));
+    CHECK(b2.get(InputAction::PitchAxis, true).id == static_cast<uint32_t>(Key::Delete));
+    CHECK(b2.get(InputAction::FireMissile, true).id == static_cast<uint32_t>(Key::F11));
+    CHECK(b2.get(InputAction::ViewLeft, true).source == BindingSource::MouseButton);
+    CHECK(b2.get(InputAction::ViewLeft, true).id == static_cast<uint32_t>(MouseButton::Left));
+    CHECK(b2.get(InputAction::ViewRight, true).id == static_cast<uint32_t>(MouseButton::Right));
+}
+
+TEST_CASE("InputBindings conflictsWith detects alt-slot conflict", "[bindings]") {
+    InputBindings b;
+    b.applyDefaults();
+    // PitchAxis alt is LeftY gamepad axis — try to put same binding in RollAxis alt
+    Binding altPitch = b.get(InputAction::PitchAxis, true);
+    auto conflict = b.conflictsWith(InputAction::RollAxis, altPitch);
+    REQUIRE(conflict.has_value());
+    CHECK(*conflict == InputAction::PitchAxis);
+}
+
+TEST_CASE("InputBindings parseBinding accepts empty source as None", "[bindings]") {
+    // A TOML entry with source = "" should deserialize to None binding
+    InputBindings b;
+    b.applyDefaults();
+    // Use raw TOML with missing source field to hit the source.empty() branch
+    REQUIRE(b.deserialize("[primary]\nPitchUp = { source = \"\", id = \"\" }\n"));
+    CHECK(b.get(InputAction::PitchUp).isNone());
+}
+
+// ---------------------------------------------------------------------------
+// AxisConfigTable — additional branch coverage
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AxisConfigTable deserialize with invalid TOML returns false", "[axis_config]") {
+    AxisConfigTable t;
+    REQUIRE_FALSE(t.deserialize("this is {{{ totally invalid"));
+}
+
+TEST_CASE("AxisConfigTable deserialize with absent axis_config section returns true (keeps defaults)",
+          "[axis_config]") {
+    AxisConfigTable t;
+    // No [axis_config] section → sec==nullptr → if(!sec) return true branch
+    REQUIRE(t.deserialize("[other]\nkey = \"value\"\n"));
+    // Defaults unchanged
+    CHECK(t.get(GamepadAxis::LeftX).deadzone == Catch::Approx(0.1f));
+}
+
+TEST_CASE("AxisConfigTable deserialize with partial axis entry (missing optional keys)", "[axis_config]") {
+    AxisConfigTable t;
+    // Only deadzone present — invert/scale/curve absent → if(auto v = ...) FALSE branches
+    REQUIRE(t.deserialize("[axis_config]\nLeftX = { deadzone = 0.12 }\n"));
+    CHECK(t.get(GamepadAxis::LeftX).deadzone == Catch::Approx(0.12f));
+    CHECK(t.get(GamepadAxis::LeftX).invert == false); // default preserved
+}
+
+TEST_CASE("AxisConfigTable serialize and deserialize roundtrip for Linear curve", "[axis_config]") {
+    AxisConfigTable t;
+    t.get(GamepadAxis::RightX).curve = AxisCurve::Linear;
+    t.get(GamepadAxis::RightX).invert = true;
+    std::string toml = t.serialize();
+    AxisConfigTable t2;
+    REQUIRE(t2.deserialize(toml));
+    CHECK(t2.get(GamepadAxis::RightX).curve == AxisCurve::Linear);
+    CHECK(t2.get(GamepadAxis::RightX).invert == true);
+}
+
+TEST_CASE("AxisConfigTable deserialize with axis name not in section continues", "[axis_config]") {
+    AxisConfigTable t;
+    // Section exists but only LeftX is present; other axes not in section → if(!entry) continue
+    REQUIRE(t.deserialize("[axis_config]\nLeftX = { deadzone = 0.20 }\n"));
+    CHECK(t.get(GamepadAxis::LeftX).deadzone == Catch::Approx(0.20f));
+    CHECK(t.get(GamepadAxis::RightX).deadzone == Catch::Approx(0.1f)); // default
+}
