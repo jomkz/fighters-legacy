@@ -22,8 +22,9 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake lcov python3-gcovr libx11-dev libxext-dev \
+          sudo apt-get install -y ninja-build cmake lcov libx11-dev libxext-dev \
             libopenal-dev libvulkan-dev glslang-tools
+          pip install gcovr
 
       - name: Configure
         run: cmake --preset coverage
