@@ -90,6 +90,11 @@ if(WIN32)
 endif()
 catch_discover_tests(test_audio DISCOVERY_MODE PRE_TEST)
 
+add_executable(test_async_filesystem test_async_filesystem.cpp)
+target_link_libraries(test_async_filesystem PRIVATE Catch2::Catch2WithMain platform-hal)
+target_include_directories(test_async_filesystem PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_async_filesystem)
+
 add_executable(test_sdl3 test_sdl3.cpp)
 target_link_libraries(test_sdl3 PRIVATE Catch2::Catch2WithMain platform-sdl3)
 target_include_directories(test_sdl3 PRIVATE "${CMAKE_SOURCE_DIR}/platform/sdl3")
@@ -101,3 +106,18 @@ if(WIN32)
     )
 endif()
 catch_discover_tests(test_sdl3 DISCOVERY_MODE PRE_TEST)
+
+add_executable(test_async_filesystem_sdl3 test_async_filesystem_sdl3.cpp)
+target_link_libraries(test_async_filesystem_sdl3 PRIVATE Catch2::Catch2WithMain platform-sdl3)
+target_include_directories(test_async_filesystem_sdl3 PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    "${CMAKE_SOURCE_DIR}/platform/sdl3"
+)
+if(WIN32)
+    add_custom_command(TARGET test_async_filesystem_sdl3 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:SDL3::SDL3>
+            $<TARGET_FILE_DIR:test_async_filesystem_sdl3>
+    )
+endif()
+catch_discover_tests(test_async_filesystem_sdl3 DISCOVERY_MODE PRE_TEST)
