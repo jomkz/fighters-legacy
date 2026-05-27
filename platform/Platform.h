@@ -3,6 +3,7 @@
 
 #include <memory>
 
+#include "IAsyncFilesystem.h"
 #include "IAudio.h"
 #include "IFilesystem.h"
 #include "IFilesystemWatcher.h"
@@ -24,6 +25,8 @@
 //   1. logger            — must be ready before any other init() can log failures
 //   2. filesystem        — asset paths needed by subsequent inits
 //   2.5 filesystemWatcher — optional; null in campaign and headless mode; init after filesystem
+//   2.6 asyncFilesystem  — optional; null in headless and test mode; init after filesystem;
+//                          call service() once per frame from the game loop
 //   3. window            — required by renderer (nativeHandle for VkSurfaceKHR)
 //   4. renderer          — depends on window
 //   5. audio             — independent of window/renderer
@@ -36,6 +39,7 @@ struct Platform {
     std::unique_ptr<ILogger> logger; // first declared → last destroyed
     std::unique_ptr<IFilesystem> filesystem;
     std::unique_ptr<IFilesystemWatcher> filesystemWatcher; // null in campaign / headless mode
+    std::unique_ptr<IAsyncFilesystem> asyncFilesystem;     // null in headless / test mode; service() each frame
     std::unique_ptr<IWindow> window;
     std::unique_ptr<IRenderer> renderer;
     std::unique_ptr<IAudio> audio;

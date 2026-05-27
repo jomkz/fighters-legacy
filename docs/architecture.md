@@ -48,9 +48,11 @@ All interfaces live under `platform/` and are exposed via the `platform-hal` CMa
 | `INetworkEventHandler` | `platform/INetwork.h` | Callback target for network events (connect, disconnect, receive); implemented by the multiplayer subsystem |
 | `INetwork` | `platform/INetwork.h` | UDP transport: bind/connect, send/recv, peer state, frame pump |
 | `IFilesystem` | `platform/IFilesystem.h` | Synchronous file I/O and directory scan over two path domains (Assets, UserData) |
+| `IAsyncFilesystemHandler` | `platform/IAsyncFilesystem.h` | Callback target for async read completions; implemented by the terrain streaming subsystem |
+| `IAsyncFilesystem` | `platform/IAsyncFilesystem.h` | Non-blocking whole-file reads for per-frame terrain chunk streaming; completions dispatched via `service()` |
 | `ILogger` | `platform/ILogger.h` | Structured logging routed to the platform-native output |
 
-**Event handler pattern:** `IWindowEventHandler`, `INetworkEventHandler`, and `ITextInputHandler` are separate interfaces registered with their respective `IWindow` / `INetwork` / `IInput` instances. The engine implements the handler; the platform backend calls it during `pollEvents()` / `service()` / text input events. This keeps platform-to-engine callbacks decoupled without requiring the backend to know anything about the game loop.
+**Event handler pattern:** `IWindowEventHandler`, `INetworkEventHandler`, `ITextInputHandler`, and `IAsyncFilesystemHandler` are separate interfaces registered with their respective `IWindow` / `INetwork` / `IInput` / `IAsyncFilesystem` instances. The engine implements the handler; the platform backend calls it during `pollEvents()` / `service()` / text input events / async I/O completions. This keeps platform-to-engine callbacks decoupled without requiring the backend to know anything about the game loop.
 
 **Wiring — `Platform` struct:** `platform/Platform.h` defines a plain aggregate struct holding `std::unique_ptr` to each interface. The platform entry point (e.g. `platform/sdl3/`) constructs a `Platform`, populates it with concrete backend instances, and passes it to the engine on startup. The engine holds `Platform` by value and owns all interface lifetimes. Backends can be mixed freely — a test build might use a null renderer stub alongside a real filesystem backend.
 
@@ -60,10 +62,11 @@ All interfaces live under `platform/` and are exposed via the `platform-hal` CMa
 - All interface methods are pure virtual. No implementation code lives in these headers.
 - Interfaces that can fail during init expose `getLastError() const → const char*` for human-readable diagnostics.
 - **Thread safety:** `ILogger::log` is the only HAL method guaranteed thread-safe. All other methods on all other interfaces must be called from the main thread.
+- **`IAsyncFilesystem` threading note:** The background worker thread is an internal implementation detail of the SDL3 backend. All `IAsyncFilesystem` methods — including `service()`, `readFileAsync()`, and `cancelRead()` — must be called from the main thread. Completion data passed to `onReadComplete()` is valid only for the duration of the callback; callers must copy any bytes they need before returning.
 
 **`IRenderer` scope (Phase 1):** `IRenderer` is lifecycle-only — init, frame begin/end, shutdown. Scene submission (mesh handles, transforms, materials) and a render graph abstraction are added in the Vulkan backend workstream (Phase 2).
 
-**`IFilesystem` is synchronous:** `readFile` blocks until the OS delivers the data. It is correct for startup asset loading, mod discovery, and config reads. It must not be called on the main thread for per-frame terrain streaming. Async file I/O is a separate Phase 2 design item.
+**`IFilesystem` is synchronous:** `readFile` blocks until the OS delivers the data. It is correct for startup asset loading, mod discovery, and config reads. It must not be called on the main thread for per-frame terrain streaming. See `IAsyncFilesystem` for async terrain streaming reads.
 
 ### Engine Core (`engine/`)
 
@@ -116,6 +119,7 @@ These decisions are finalized and not subject to revision without an RFC.
 | Entity system | Dynamic pool, no hard caps | No fixed object count limit |
 | License | GPL v3 | Engine modifications must stay open source; protects community investment |
 | Hosting | GitHub, public repository | Unlimited Actions CI on public repos; GitHub Free sufficient |
+| Async file I/O backend | Worker thread + `std::mutex` queue (`SDL3AsyncFilesystem`) | `SDL_AsyncIO` deferred; consistent cross-platform behaviour without conditional compilation in the interface |
 
 ## Content Pack Architecture
 

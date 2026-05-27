@@ -21,7 +21,7 @@ enum class SeekOrigin : uint8_t { Begin, Current, End };
 // IMPORTANT: This is a synchronous, blocking interface. readFile will not return
 // until the OS delivers the data. It is correct for startup asset loading, mod
 // discovery, and config reads. Do NOT call it on the main thread for per-frame
-// terrain streaming; a separate async I/O design is planned for Phase 2.
+// terrain streaming; use IAsyncFilesystem (platform/IAsyncFilesystem.h) for that.
 class IFilesystem {
   public:
     virtual ~IFilesystem() = default;

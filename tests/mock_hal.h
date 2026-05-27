@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "IAsyncFilesystem.h"
 #include "IAudio.h"
 #include "IFilesystem.h"
 #include "IInput.h"
@@ -234,4 +235,82 @@ struct MockFilesystem : public IFilesystem {
     int nextHandle = 1;
     std::map<int, std::string> readHandles;
     std::map<int, std::string> writeHandles;
+};
+
+struct MockAsyncFilesystem : public IAsyncFilesystem {
+    std::map<std::string, std::vector<uint8_t>> files;
+
+    struct PendingRead {
+        AsyncReadId id;
+        PathDomain domain;
+        std::string path;
+        bool cancelled{false};
+    };
+    std::vector<PendingRead> pending;
+
+    AsyncReadId nextId{1};
+    IAsyncFilesystemHandler* handler{nullptr};
+    bool initialized{false};
+    std::string lastErrorBuf;
+
+    void addFile(const std::string& path, const std::vector<uint8_t>& data) {
+        files[path] = data;
+    }
+    void addFile(const std::string& path, const std::string& content) {
+        files[path] = std::vector<uint8_t>(content.begin(), content.end());
+    }
+
+    bool init() override {
+        initialized = true;
+        return true;
+    }
+    void shutdown() override {
+        for (auto& p : pending)
+            if (handler)
+                handler->onReadComplete(p.id, AsyncReadStatus::Cancelled, nullptr, 0, nullptr);
+        pending.clear();
+        initialized = false;
+    }
+    void setEventHandler(IAsyncFilesystemHandler* h) override {
+        handler = h;
+    }
+
+    AsyncReadId readFileAsync(PathDomain domain, const char* path) override {
+        if (!initialized || !path)
+            return 0;
+        AsyncReadId id = nextId++;
+        pending.push_back({id, domain, std::string(path), false});
+        return id;
+    }
+    void cancelRead(AsyncReadId id) override {
+        for (auto& p : pending)
+            if (p.id == id) {
+                p.cancelled = true;
+                return;
+            }
+    }
+    void service() override {
+        std::vector<PendingRead> batch;
+        std::swap(batch, pending);
+        for (auto& p : batch) {
+            if (p.cancelled) {
+                if (handler)
+                    handler->onReadComplete(p.id, AsyncReadStatus::Cancelled, nullptr, 0, nullptr);
+                continue;
+            }
+            auto it = files.find(p.path);
+            if (it == files.end()) {
+                lastErrorBuf = "file not found: " + p.path;
+                if (handler)
+                    handler->onReadComplete(p.id, AsyncReadStatus::Error, nullptr, 0, lastErrorBuf.c_str());
+            } else {
+                if (handler)
+                    handler->onReadComplete(p.id, AsyncReadStatus::Success, it->second.data(), it->second.size(),
+                                            nullptr);
+            }
+        }
+    }
+    const char* getLastError() const override {
+        return lastErrorBuf.empty() ? nullptr : lastErrorBuf.c_str();
+    }
 };
