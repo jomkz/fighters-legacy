@@ -58,6 +58,7 @@ struct GpuMaterial {
     float metallicFactor{0.0f};
     float roughnessFactor{1.0f};
     VkDescriptorSet descriptorSet{VK_NULL_HANDLE};
+    bool alphaBlend{false}; // true = alpha-blended transparent pass
     bool alive{false};
 };
 

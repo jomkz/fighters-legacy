@@ -466,3 +466,77 @@ TEST_CASE("SceneRenderer applies velocity extrapolation to transform position") 
     float tx = renderer.lastScene.renderItems[0].transform[3][0];
     CHECK(tx == Catch::Approx(1.0f).margin(1e-4f));
 }
+
+// ---------------------------------------------------------------------------
+// SceneRenderer -- draw-distance cull
+// ---------------------------------------------------------------------------
+
+TEST_CASE("SceneRenderer culls entity beyond draw distance") {
+    MockLogger logger;
+    auto pack = std::make_unique<MockContentPack>();
+    pack->meshes["f15c"] = {1, 2, 3};
+
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, oneType(), assets, renderer};
+
+    // Set a tight draw distance: 10 km
+    sr.setDrawDistance(10.0f);
+
+    // Entity 11 km away (beyond the 10 km limit)
+    RenderSnapshot snap = makeSnap();
+    snap.entries.push_back(makeEntry(0, {11000.0f, 0.0f, 0.0f}));
+    bridge.publish(std::move(snap));
+
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+
+    CHECK(renderer.setSceneCount == 1);
+    CHECK(renderer.lastScene.renderItems.empty()); // culled
+}
+
+TEST_CASE("SceneRenderer keeps entity within draw distance") {
+    MockLogger logger;
+    auto pack = std::make_unique<MockContentPack>();
+    pack->meshes["f15c"] = {1, 2, 3};
+
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::move(pack));
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, oneType(), assets, renderer};
+
+    // Set draw distance to 10 km; entity at 9 km is within range
+    sr.setDrawDistance(10.0f);
+
+    RenderSnapshot snap = makeSnap();
+    snap.entries.push_back(makeEntry(0, {9000.0f, 0.0f, 0.0f}));
+    bridge.publish(std::move(snap));
+
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+
+    REQUIRE(renderer.setSceneCount == 1);
+    CHECK(renderer.lastScene.renderItems.size() == 1);
+}
+
+// ---------------------------------------------------------------------------
+// MockRenderer -- applySettings is a no-op
+// ---------------------------------------------------------------------------
+
+TEST_CASE("MockRenderer applySettings accepts any RendererSettings") {
+    MockRenderer renderer;
+    RendererSettings rs{};
+    rs.vsync = RendererVsyncMode::Off;
+    rs.antiAliasing = false;
+    rs.bloom = false;
+    rs.drawDistanceKm = 20.0f;
+    renderer.applySettings(rs);     // must not crash
+    CHECK(renderer.initCount == 0); // no side effects on other counters
+}

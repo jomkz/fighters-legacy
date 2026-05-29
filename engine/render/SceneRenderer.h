@@ -54,6 +54,10 @@ class SceneRenderer {
     void renderFrame(float alpha, const CameraView& camera, const EnvironmentState& env,
                      std::span<const ParticleEmitterState> extraEmitters = {});
 
+    // Set the maximum entity draw distance.  Entities beyond this range are
+    // culled before building RenderItems.  Default is 50 km.
+    void setDrawDistance(float distanceKm) noexcept;
+
   private:
     MeshHandle getOrUploadMesh(const std::string& name);
     MaterialHandle getOrUploadMaterial(const std::string& meshName);
@@ -72,6 +76,8 @@ class SceneRenderer {
     std::unordered_map<std::string, MeshHandle> m_meshCache;
     std::unordered_map<std::string, MaterialHandle> m_materialCache;
     std::vector<RenderItem> m_items; // reused each frame; avoids per-frame allocation
+
+    float m_drawDistanceSq{50000.0f * 50000.0f}; // squared cull distance in meters (default 50 km)
 
     // Nominal tick period used for velocity-based position extrapolation.
     static constexpr float kTickDt = 1.0f / 60.0f;

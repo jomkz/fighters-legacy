@@ -157,6 +157,41 @@ int main(int argc, char** argv) {
     // Step 14: GPU info → crash reporter.
     crashReporter.setGpuInfo(p.renderer->gpuInfo());
 
+    // Step 14.1: Translate GraphicsSettings → RendererSettings and apply to renderer.
+    // drawDistanceKm is applied to sceneRenderer after it is constructed (step 17b.2).
+    RendererSettings rendererSettings{};
+    {
+        const GraphicsSettings g = userConfig.graphics();
+        switch (g.vsync) {
+        case VsyncMode::Off:
+            rendererSettings.vsync = RendererVsyncMode::Off;
+            break;
+        case VsyncMode::Adaptive:
+            rendererSettings.vsync = RendererVsyncMode::Adaptive;
+            break;
+        default:
+            rendererSettings.vsync = RendererVsyncMode::On;
+            break;
+        }
+        rendererSettings.antiAliasing = g.antiAliasing;
+        rendererSettings.bloom = (g.qualityPreset >= QualityLevel::Medium);
+        switch (g.drawDistance) {
+        case DrawDistance::Low:
+            rendererSettings.drawDistanceKm = 15.0f;
+            break;
+        case DrawDistance::Medium:
+            rendererSettings.drawDistanceKm = 30.0f;
+            break;
+        case DrawDistance::Ultra:
+            rendererSettings.drawDistanceKm = 100.0f;
+            break;
+        default: // High
+            rendererSettings.drawDistanceKm = 50.0f;
+            break;
+        }
+        p.renderer->applySettings(rendererSettings);
+    }
+
     // Step 15: Mod loading.
     ModLoader modLoader(*p.filesystem, *rawLogger);
     auto packs = modLoader.load();
@@ -214,6 +249,9 @@ int main(int argc, char** argv) {
                                         return true;
                                     },
                                     assets, *p.renderer};
+
+    // Apply draw distance from settings (must come after SceneRenderer construction).
+    sceneRenderer.setDrawDistance(rendererSettings.drawDistanceKm);
 
     // Wire the particle system so damaged entities emit effects each frame.
     // EffectResolver uses the snapshot typeIndex + damageLevel without touching sim-thread state.

@@ -21,6 +21,11 @@ SceneRenderer::SceneRenderer(SimRenderBridge& bridge, MeshNameResolver resolver,
 
 SceneRenderer::~SceneRenderer() = default;
 
+void SceneRenderer::setDrawDistance(float distanceKm) noexcept {
+    const float meters = distanceKm * 1000.0f;
+    m_drawDistanceSq = meters * meters;
+}
+
 void SceneRenderer::setParticleSystem(ParticleSystem* ps, EffectResolver effectResolver) noexcept {
     m_particleSystem = ps;
     m_effectResolver = std::move(effectResolver);
@@ -73,6 +78,11 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
 
         // Camera-relative position (float32-safe at arbitrary theater scale).
         glm::vec3 relPos = worldPos - camera.worldOrigin;
+
+        // Distance cull — skip entities beyond the configured draw distance.
+        float distSq = relPos.x * relPos.x + relPos.y * relPos.y + relPos.z * relPos.z;
+        if (distSq > m_drawDistanceSq)
+            continue;
 
         // TRS model matrix (no scale — entities are unit-scale in world space).
         glm::mat4 model = glm::translate(glm::mat4(1.0f), relPos) * glm::mat4_cast(entry.orientation);

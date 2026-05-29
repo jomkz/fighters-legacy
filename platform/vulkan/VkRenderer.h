@@ -72,6 +72,26 @@ struct SkyPushConstants {
 };
 static_assert(sizeof(SkyPushConstants) <= 128);
 
+// Push constants for the tonemap + FXAA + bloom composite pass.
+struct TonemapPush {
+    float texelSizeX{0.0f};    // 1 / width  — used by FXAA for neighbour sampling
+    float texelSizeY{0.0f};    // 1 / height
+    uint32_t enableFxaa{0};    // 1 = apply FXAA on tonemapped output
+    float bloomStrength{0.0f}; // bloom blend multiplier (0 = disabled)
+};
+static_assert(sizeof(TonemapPush) == 16);
+static_assert(sizeof(TonemapPush) <= 128);
+
+// Push constants for the bloom blur passes (shared by H and V).
+struct BloomPush {
+    float texelSizeX{0.0f};
+    float texelSizeY{0.0f};
+    uint32_t isVertical{0}; // 0 = horizontal blur, 1 = vertical blur
+    float _pad{0.0f};
+};
+static_assert(sizeof(BloomPush) == 16);
+static_assert(sizeof(BloomPush) <= 128);
+
 // GPU particle state — must exactly match the Particle struct in particle_sim.comp
 // and particle.vert (std430 layout: vec3+float pairs pack without padding).
 struct GpuParticle {
@@ -117,6 +137,9 @@ class VkRenderer : public IRenderer {
 
     // ── Scene submission ───────────────────────────────────────────────────
     void setScene(const FrameScene& scene) override;
+
+    // ── Settings ───────────────────────────────────────────────────────────
+    void applySettings(const RendererSettings& settings) override;
 
   private:
     // ── Core Vulkan objects ────────────────────────────────────────────────
@@ -184,6 +207,17 @@ class VkRenderer : public IRenderer {
     bool createParticleRenderPipelines();
     void recordParticleCompute(VkCommandBuffer cmd, float dt);
     void recordParticleDraw(VkCommandBuffer cmd);
+
+    // ── Transparent pass ───────────────────────────────────────────────────
+    bool createForwardAlphaPipeline();
+
+    // ── Bloom ──────────────────────────────────────────────────────────────
+    bool createBloomImages();
+    bool createBloomDescriptors();
+    void updateBloomDescriptors();
+    bool createBloomPipelines();
+    void destroyBloomResources();
+    void recordBloomPasses(VkCommandBuffer cmd);
 
     // ── Shader / resource discovery ────────────────────────────────────────
     static std::string resolveShaderDir();
@@ -264,10 +298,14 @@ class VkRenderer : public IRenderer {
     std::array<PerFrameData, MAX_FRAMES_IN_FLIGHT> m_perFrame{};
     VkDescriptorPool m_perFramePool{VK_NULL_HANDLE};
 
+    // ── Settings ──────────────────────────────────────────────────────────
+    RendererSettings m_settings{};
+
     // ── Pipelines ─────────────────────────────────────────────────────────
     VkPipelineCache m_pipelineCache{VK_NULL_HANDLE};
     VkPipelineLayout m_forwardLayout{VK_NULL_HANDLE};
     VkPipeline m_forwardPipeline{VK_NULL_HANDLE};
+    VkPipeline m_forwardAlphaPipeline{VK_NULL_HANDLE}; // alpha-blended transparent pass
     VkPipelineLayout m_tonemapLayout{VK_NULL_HANDLE};
     VkPipeline m_tonemapPipeline{VK_NULL_HANDLE};
     VkPipelineLayout m_shadowLayout{VK_NULL_HANDLE};
@@ -328,6 +366,26 @@ class VkRenderer : public IRenderer {
 
     // Ring-buffer spawn pointer (CPU-maintained; wraps around kMaxParticles).
     uint32_t m_nextParticleSlot{0};
+
+    // ── Bloom attachments (half-res RGBA16F — recreated with swapchain) ───
+    VkImage m_bloomImage{VK_NULL_HANDLE};
+    VkDeviceMemory m_bloomMemory{VK_NULL_HANDLE};
+    VkImageView m_bloomView{VK_NULL_HANDLE};
+    VkImage m_bloomAuxImage{VK_NULL_HANDLE};
+    VkDeviceMemory m_bloomAuxMemory{VK_NULL_HANDLE};
+    VkImageView m_bloomAuxView{VK_NULL_HANDLE};
+
+    // ── Bloom descriptors (shared set layout: 1 combined sampler, binding 0) ─
+    VkDescriptorSetLayout m_bloomSetLayout{VK_NULL_HANDLE};
+    VkDescriptorPool m_bloomPool{VK_NULL_HANDLE};
+    VkDescriptorSet m_bloomThresholdSet{VK_NULL_HANDLE}; // input = HDR
+    VkDescriptorSet m_bloomBlurHSet{VK_NULL_HANDLE};     // input = bloom → writes aux
+    VkDescriptorSet m_bloomBlurVSet{VK_NULL_HANDLE};     // input = aux  → writes bloom
+
+    // ── Bloom pipelines (tonemap.vert + bloom_threshold/blur.frag) ────────
+    VkPipelineLayout m_bloomLayout{VK_NULL_HANDLE};
+    VkPipeline m_bloomThresholdPipeline{VK_NULL_HANDLE};
+    VkPipeline m_bloomBlurPipeline{VK_NULL_HANDLE};
 
     // ── GPU resource manager ──────────────────────────────────────────────
     VkResourceManager m_resources;

@@ -27,13 +27,15 @@ FA support lives in jomkz/fa-content. No FA-specific code belongs in this repo.
 
 ### Renderer architecture (Phase 2)
 
-`VkRenderer` (platform/vulkan/) uses Vulkan 1.3 dynamic rendering (`VK_KHR_dynamic_rendering`) — no `VkRenderPass` or `VkFramebuffer` objects. Five steps per frame (one compute dispatch + four rendering scopes):
+`VkRenderer` (platform/vulkan/) uses Vulkan 1.3 dynamic rendering (`VK_KHR_dynamic_rendering`) — no `VkRenderPass` or `VkFramebuffer` objects. Seven steps per frame (one compute dispatch + six rendering scopes):
 
 1. **Shadow** — `kNumCascades=4` PSSM cascades rendered into a `kShadowRes=2048` 2D depth array (`VK_FORMAT_D32_SFLOAT`, **forward-Z**, depth clear = 1.0). Cascade matrices computed via tight bounding-sphere fit; PCF comparison sampler (`VK_COMPARE_OP_LESS_OR_EQUAL`). `ShadowUBO` bound at set 0, binding 2; `sampler2DArrayShadow` at set 0, binding 3.
 2. **Particle compute** — `particle_sim.comp` dispatched before forward pass; advances age/pos for `kMaxParticles=8192` slots (local_size_x=64). New particles written to a host-visible spawn staging buffer by CPU each frame then `vkCmdCopyBuffer`'d into the device-local pool SSBO (ring-buffer overwrite). Push constant `{dt, count, gravity, _pad}` (16 bytes). Barrier: COMPUTE_WRITE → VERTEX_SHADER_READ before forward pass.
-3. **Forward** — Cook-Torrance PBR (GGX NDF, Smith geometry, Schlick Fresnel) with normal maps + ORM textures (set 1: base color / normal / ORM at bindings 0–2). Geometry into HDR offscreen (`VK_FORMAT_R16G16B16A16_SFLOAT`) with **reverse-Z** depth (`VK_FORMAT_D32_SFLOAT`, far = 0.0, depth clear = 0.0, compare = GREATER). Depth storeOp = STORE (sky + particle pass reads depth).
+3. **Forward (opaque)** — Cook-Torrance PBR (GGX NDF, Smith geometry, Schlick Fresnel) with normal maps + ORM textures (set 1: base color / normal / ORM at bindings 0–2). Geometry into HDR offscreen (`VK_FORMAT_R16G16B16A16_SFLOAT`) with **reverse-Z** depth (`VK_FORMAT_D32_SFLOAT`, far = 0.0, depth clear = 0.0, compare = GREATER). Depth storeOp = STORE (sky + particle + transparent + bloom passes read depth).
 4. **Sky + particles** — combined rendering scope: sky fullscreen triangle (GREATER_OR_EQUAL, depth write off) followed by particle billboard draw (GREATER, depth write off, depth test on). Two instanced draws (`vkCmdDraw(6, kMaxParticles, 0, 0)`): additive pipeline (fire/explosion) then alpha pipeline (smoke). `particle.vert` reads particle SSBO and camera UBO from set 0 (bindings 0–1); push constant `uint32_t renderAdditive` selects which blend-mode particles to emit (others output degenerate off-screen positions).
-5. **Tonemap** — Khronos PBR Neutral, fullscreen HDR → swapchain (`B8G8R8A8_SRGB`).
+5. **Transparent** — alpha-blended items (materials with `MaterialDesc::alphaBlend=true`) drawn back-to-front using `m_forwardAlphaPipeline` (depth write OFF, cull NONE, SRC_ALPHA/ONE_MINUS_SRC_ALPHA blend). Sorted in `recordCommandBuffer` by descending squared camera distance.
+6. **Bloom** — enabled when `RendererSettings::bloom=true`. Three half-resolution passes into `m_bloomImage`/`m_bloomAuxImage`: bright-pass threshold (`bloom_threshold.frag`), horizontal Gaussian blur, vertical Gaussian blur. `TonemapPush::bloomStrength` controls additive blend weight in the tonemap shader.
+7. **Tonemap** — Khronos PBR Neutral + optional bloom composite (binding 1 = bloom buffer) + optional FXAA (5-tap luma edge-detect + 3-sample blur). `TonemapPush` (16 bytes): texelSizeX/Y, enableFxaa, bloomStrength. Fullscreen HDR → swapchain (`B8G8R8A8_SRGB`).
 
 **Note:** shadow passes use forward-Z (near=0, far=1); scene depth uses reverse-Z. These are independent depth spaces.
 
@@ -66,6 +68,7 @@ Runtime shader discovery: `VkRenderer::resolveShaderDir()` tries `SDL_GetBasePat
 - **Velocity extrapolation**: `rendered_pos = entry.position + entry.velocity * (alpha * kTickDt)` where `alpha = GameLoop::shellTick()` and `kTickDt = 1/60 s`.
 - **Damage variant**: if `entry.damageLevel > 0` and `EntityDef::classicDamageMesh` is non-empty, the damage mesh is loaded instead; `kRenderFlagDamaged` is set on the `RenderItem`.
 - **Sort**: opaque items sorted front-to-back by squared camera-relative distance to minimise overdraw.
+- **Draw-distance cull**: `setDrawDistance(float km)` configures the entity cull radius; entities beyond it are skipped before RenderItem construction. Wired from `RendererSettings::drawDistanceKm` in `main.cpp`.
 - `SceneRenderer::renderFrame(alpha, camera, env, extraEmitters={})` calls `tryAdvance()` internally; callers must NOT also call `renderBridge.tryAdvance()`. `extraEmitters` is merged with entity-damage effects when a ParticleSystem is set.
 
 ### GPU particle system (Phase 2, PR 6)
@@ -118,10 +121,10 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 - `docs/development.md` — build prerequisites per platform
 - `GOVERNANCE.md` — decision-making and RFC process
 - `CMakePresets.json` — all build presets (debug / release / coverage / asan / msvc variants)
-- `platform/RenderTypes.h` — GPU-agnostic POD types: `MeshHandle`, `TextureHandle`, `MaterialHandle`, `CameraView`, `RenderItem`, `FrameScene`, `EnvironmentState`, `ParticleEmitterState`
+- `platform/RenderTypes.h` — GPU-agnostic POD types: `MeshHandle`, `TextureHandle`, `MaterialHandle`, `CameraView`, `RenderItem`, `FrameScene`, `EnvironmentState`, `ParticleEmitterState`; also `RendererVsyncMode` + `RendererSettings` (vsync, FXAA, bloom, drawDistanceKm)
 - `engine/render/RenderSnapshot.h` — `EntityRenderEntry` + `RenderSnapshot`; POD only, no engine-entity headers (uses raw uint32_t/uint8_t to avoid circular deps)
 - `engine/render/SimRenderBridge.h` — lock-free triple-buffer bridge; `publish()` sim-thread-only, `tryAdvance()`/`current()`/`hasSnapshot()` render-thread-only
-- `engine/render/SceneRenderer.h` — snapshot→FrameScene bridge; `renderFrame(alpha, camera, env, extraEmitters={})` between beginFrame/endFrame; handles mesh upload/cache, camera-relative transforms, damage variant, front-to-back sort; `setParticleSystem(ps, effectResolver)` wires damage-effect emission
+- `engine/render/SceneRenderer.h` — snapshot→FrameScene bridge; `renderFrame(alpha, camera, env, extraEmitters={})` between beginFrame/endFrame; handles mesh upload/cache, camera-relative transforms, damage variant, front-to-back sort, draw-distance cull; `setParticleSystem(ps, effectResolver)` wires damage-effect emission; `setDrawDistance(km)` sets entity cull distance
 - `engine/render/CameraController.h` — Free-orbit + Chase cameras; `view(aspectRatio)` → `CameraView`; infinite reverse-Z projection with Vulkan Y-flip
 - `engine/render/ParticleSystem.h` — `ParticlePreset` + `ParticleSystem`; preset registry, per-frame emit/reset/emitters() accumulator; `DamagePenalty::visualEffect` maps to preset name
 - `cmake/dependencies.cmake` — all FetchContent declarations; GLM is unconditional, Vulkan-specific deps are gated on `Vulkan_FOUND`

@@ -66,4 +66,11 @@ class IRenderer {
     // and endFrame. Spans are non-owning; the caller must keep backing arrays
     // alive until after endFrame returns.
     virtual void setScene(const FrameScene& scene) = 0;
+
+    // ── Settings ───────────────────────────────────────────────────────────
+    // Apply renderer settings (vsync, FXAA, bloom, etc.).  Safe to call at
+    // any time outside of begin/endFrame; changes take effect on the next
+    // frame (vsync requires swapchain recreation and is applied on the next
+    // resize or explicit recreate).
+    virtual void applySettings(const RendererSettings& settings) = 0;
 };

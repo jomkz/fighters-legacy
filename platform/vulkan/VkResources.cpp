@@ -765,6 +765,7 @@ MaterialHandle VkResourceManager::createMaterial(const MaterialDesc& desc) {
     mat.baseColorFactor = desc.baseColorFactor;
     mat.metallicFactor = desc.metallicFactor;
     mat.roughnessFactor = desc.roughnessFactor;
+    mat.alphaBlend = desc.alphaBlend;
 
     VkDescriptorSetAllocateInfo allocCI{};
     allocCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;

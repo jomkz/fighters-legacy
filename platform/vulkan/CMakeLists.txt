@@ -36,6 +36,8 @@ set(GLSL_SHADERS
     sky.frag
     tonemap.vert
     tonemap.frag
+    bloom_threshold.frag
+    bloom_blur.frag
     particle_sim.comp
     particle.vert
     particle.frag

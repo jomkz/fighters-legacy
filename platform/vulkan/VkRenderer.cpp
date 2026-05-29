@@ -259,6 +259,14 @@ void VkRenderer::destroyShadowResources() {
 }
 
 // ---------------------------------------------------------------------------
+// applySettings — store settings; vsync takes effect on next swapchain recreate
+// ---------------------------------------------------------------------------
+void VkRenderer::applySettings(const RendererSettings& settings) {
+    m_settings = settings;
+    m_framebufferResized = true; // trigger swapchain recreate on next beginFrame
+}
+
+// ---------------------------------------------------------------------------
 // IRenderer — init
 // ---------------------------------------------------------------------------
 bool VkRenderer::init(IWindow* window) {
@@ -294,6 +302,8 @@ bool VkRenderer::init(IWindow* window) {
         return false;
     if (!createHdrImage())
         return false;
+    if (!createBloomImages())
+        return false;
     if (!createHdrSampler())
         return false;
     if (!createShadowResources())
@@ -310,13 +320,19 @@ bool VkRenderer::init(IWindow* window) {
         return false;
     if (!createTonemapDescriptors())
         return false;
+    if (!createBloomDescriptors())
+        return false;
     if (!createForwardPipeline())
+        return false;
+    if (!createForwardAlphaPipeline())
         return false;
     if (!createTonemapPipeline())
         return false;
     if (!createShadowPipeline())
         return false;
     if (!createSkyPipeline())
+        return false;
+    if (!createBloomPipelines())
         return false;
     if (!createParticleResources())
         return false;
@@ -628,9 +644,15 @@ void VkRenderer::shutdown() {
 
     cleanupSwapchain();
 
+    destroyBloomResources();
+
     if (m_forwardPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_device, m_forwardPipeline, nullptr);
         m_forwardPipeline = VK_NULL_HANDLE;
+    }
+    if (m_forwardAlphaPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(m_device, m_forwardAlphaPipeline, nullptr);
+        m_forwardAlphaPipeline = VK_NULL_HANDLE;
     }
     if (m_forwardLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(m_device, m_forwardLayout, nullptr);
@@ -976,12 +998,24 @@ bool VkRenderer::createSwapchain(int width, int height) {
     std::vector<VkPresentModeKHR> modes(modeCount);
     vkGetPhysicalDeviceSurfacePresentModesKHR(m_physicalDevice, m_surface, &modeCount, modes.data());
 
-    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
-    for (auto m : modes)
-        if (m == VK_PRESENT_MODE_MAILBOX_KHR) {
-            presentMode = m;
-            break;
-        }
+    // Select present mode based on vsync setting.
+    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR; // always available
+    auto hasMode = [&](VkPresentModeKHR want) {
+        for (auto m : modes)
+            if (m == want)
+                return true;
+        return false;
+    };
+    if (m_settings.vsync == RendererVsyncMode::Off) {
+        if (hasMode(VK_PRESENT_MODE_IMMEDIATE_KHR))
+            presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+        else if (hasMode(VK_PRESENT_MODE_MAILBOX_KHR))
+            presentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+    } else if (m_settings.vsync == RendererVsyncMode::Adaptive) {
+        if (hasMode(VK_PRESENT_MODE_FIFO_RELAXED_KHR))
+            presentMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
+    }
+    // RendererVsyncMode::On stays with FIFO_KHR (guaranteed vsync)
 
     if (caps.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
         m_swapchainExtent = caps.currentExtent;
@@ -1164,28 +1198,30 @@ void VkRenderer::destroyAttachments() {
     };
     destroy(m_depthView, m_depthImage, m_depthMemory);
     destroy(m_hdrView, m_hdrImage, m_hdrMemory);
+    destroy(m_bloomView, m_bloomImage, m_bloomMemory);
+    destroy(m_bloomAuxView, m_bloomAuxImage, m_bloomAuxMemory);
 }
 
 // ---------------------------------------------------------------------------
 // Tonemap descriptor
 // ---------------------------------------------------------------------------
 bool VkRenderer::createTonemapDescriptors() {
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Binding 0: HDR buffer; binding 1: bloom buffer (for composite in tonemap shader).
+    const std::array<VkDescriptorSetLayoutBinding, 2> bindings{{
+        {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+    }};
 
     VkDescriptorSetLayoutCreateInfo layoutCI{};
     layoutCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutCI.bindingCount = 1;
-    layoutCI.pBindings = &binding;
+    layoutCI.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutCI.pBindings = bindings.data();
     if (vkCreateDescriptorSetLayout(m_device, &layoutCI, nullptr, &m_tonemapSetLayout) != VK_SUCCESS) {
         m_lastError = "vkCreateDescriptorSetLayout (tonemap) failed";
         return false;
     }
 
-    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
     VkDescriptorPoolCreateInfo poolCI{};
     poolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolCI.maxSets = 1;
@@ -1210,19 +1246,25 @@ bool VkRenderer::createTonemapDescriptors() {
 }
 
 void VkRenderer::updateHdrDescriptor() {
-    VkDescriptorImageInfo imageInfo{};
-    imageInfo.sampler = m_hdrSampler;
-    imageInfo.imageView = m_hdrView;
-    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    auto makeInfo = [this](VkImageView view) {
+        VkDescriptorImageInfo info{};
+        info.sampler = m_hdrSampler;
+        info.imageView = view;
+        info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        return info;
+    };
 
-    VkWriteDescriptorSet write{};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = m_tonemapSet;
-    write.dstBinding = 0;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.pImageInfo = &imageInfo;
-    vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+    // Binding 0: HDR; binding 1: bloom (points to bloom image when available, else HDR as dummy).
+    const VkDescriptorImageInfo hdrInfo = makeInfo(m_hdrView);
+    const VkDescriptorImageInfo bloomInfo = makeInfo(m_bloomView != VK_NULL_HANDLE ? m_bloomView : m_hdrView);
+
+    const std::array<VkWriteDescriptorSet, 2> writes{{
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_tonemapSet, 0, 0, 1,
+         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &hdrInfo, nullptr, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_tonemapSet, 1, 0, 1,
+         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bloomInfo, nullptr, nullptr},
+    }};
+    vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -1539,6 +1581,131 @@ bool VkRenderer::createForwardPipeline() {
 }
 
 // ---------------------------------------------------------------------------
+// createForwardAlphaPipeline — same shaders as forward but with alpha blend,
+// depth write OFF, no face culling (for canopy glass and similar double-sided
+// transparent surfaces).
+// ---------------------------------------------------------------------------
+bool VkRenderer::createForwardAlphaPipeline() {
+    auto vertCode = loadSpirv(m_shaderDir + "mesh.vert.spv");
+    auto fragCode = loadSpirv(m_shaderDir + "mesh.frag.spv");
+    if (vertCode.empty() || fragCode.empty()) {
+        m_lastError = "failed to load mesh shader SPIR-V (alpha pipeline): " + m_shaderDir;
+        return false;
+    }
+
+    VkShaderModule vertMod = createShaderModule(m_device, vertCode);
+    VkShaderModule fragMod = createShaderModule(m_device, fragCode);
+
+    const std::array<VkPipelineShaderStageCreateInfo, 2> stages{{
+        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vertMod, "main",
+         nullptr},
+        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fragMod, "main",
+         nullptr},
+    }};
+
+    VkVertexInputBindingDescription binding{};
+    binding.binding = 0;
+    binding.stride = sizeof(Vertex);
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    const std::array<VkVertexInputAttributeDescription, 4> attrs{{
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
+        {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)},
+        {2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex, tangent)},
+        {3, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)},
+    }};
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &binding;
+    vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(attrs.size());
+    vertexInput.pVertexAttributeDescriptions = attrs.data();
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    const std::array<VkDynamicState, 2> dynamicStates = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+    dynamicState.pDynamicStates = dynamicStates.data();
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode = VK_CULL_MODE_NONE; // transparent surfaces rendered from both sides
+    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    rasterizer.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_FALSE;            // transparent — don't occlude opaques behind
+    depthStencil.depthCompareOp = VK_COMPARE_OP_GREATER; // reverse-Z
+
+    VkPipelineColorBlendAttachmentState blendAtt{};
+    blendAtt.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    blendAtt.blendEnable = VK_TRUE;
+    blendAtt.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAtt.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blendAtt.colorBlendOp = VK_BLEND_OP_ADD;
+    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    blendAtt.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blendAtt.alphaBlendOp = VK_BLEND_OP_ADD;
+
+    VkPipelineColorBlendStateCreateInfo colorBlend{};
+    colorBlend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlend.attachmentCount = 1;
+    colorBlend.pAttachments = &blendAtt;
+
+    VkFormat hdrFmt = kHdrFormat;
+    VkPipelineRenderingCreateInfo renderingCI{};
+    renderingCI.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    renderingCI.colorAttachmentCount = 1;
+    renderingCI.pColorAttachmentFormats = &hdrFmt;
+    renderingCI.depthAttachmentFormat = kDepthFormat;
+
+    VkGraphicsPipelineCreateInfo pipelineCI{};
+    pipelineCI.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineCI.pNext = &renderingCI;
+    pipelineCI.stageCount = 2;
+    pipelineCI.pStages = stages.data();
+    pipelineCI.pVertexInputState = &vertexInput;
+    pipelineCI.pInputAssemblyState = &inputAssembly;
+    pipelineCI.pViewportState = &viewportState;
+    pipelineCI.pRasterizationState = &rasterizer;
+    pipelineCI.pMultisampleState = &multisampling;
+    pipelineCI.pDepthStencilState = &depthStencil;
+    pipelineCI.pColorBlendState = &colorBlend;
+    pipelineCI.pDynamicState = &dynamicState;
+    pipelineCI.layout = m_forwardLayout; // same layout as opaque forward
+    pipelineCI.renderPass = VK_NULL_HANDLE;
+
+    const VkResult result =
+        vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &pipelineCI, nullptr, &m_forwardAlphaPipeline);
+    vkDestroyShaderModule(m_device, vertMod, nullptr);
+    vkDestroyShaderModule(m_device, fragMod, nullptr);
+
+    if (result != VK_SUCCESS) {
+        m_lastError = "vkCreateGraphicsPipelines (forward alpha) failed";
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // createTonemapPipeline — fullscreen HDR→LDR into swapchain
 // ---------------------------------------------------------------------------
 bool VkRenderer::createTonemapPipeline() {
@@ -1599,10 +1766,17 @@ bool VkRenderer::createTonemapPipeline() {
     colorBlend.attachmentCount = 1;
     colorBlend.pAttachments = &colorBlendAttachment;
 
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.offset = 0;
+    pushRange.size = sizeof(TonemapPush);
+
     VkPipelineLayoutCreateInfo layoutCI{};
     layoutCI.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layoutCI.setLayoutCount = 1;
     layoutCI.pSetLayouts = &m_tonemapSetLayout;
+    layoutCI.pushConstantRangeCount = 1;
+    layoutCI.pPushConstantRanges = &pushRange;
     if (vkCreatePipelineLayout(m_device, &layoutCI, nullptr, &m_tonemapLayout) != VK_SUCCESS) {
         m_lastError = "vkCreatePipelineLayout (tonemap) failed";
         vkDestroyShaderModule(m_device, vertMod, nullptr);
@@ -2488,6 +2662,342 @@ bool VkRenderer::createSyncObjects() {
 }
 
 // ---------------------------------------------------------------------------
+// Bloom images (half-resolution RGBA16F) — created alongside HDR + depth,
+// destroyed in destroyAttachments() on swapchain resize.
+// ---------------------------------------------------------------------------
+bool VkRenderer::createBloomImages() {
+    const uint32_t w = std::max(1u, m_swapchainExtent.width / 2);
+    const uint32_t h = std::max(1u, m_swapchainExtent.height / 2);
+    const VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (!createAttachmentImage(w, h, kHdrFormat, usage, VK_IMAGE_ASPECT_COLOR_BIT, m_bloomImage, m_bloomMemory,
+                               m_bloomView)) {
+        m_lastError = "createAttachmentImage (bloom) failed";
+        return false;
+    }
+    if (!createAttachmentImage(w, h, kHdrFormat, usage, VK_IMAGE_ASPECT_COLOR_BIT, m_bloomAuxImage, m_bloomAuxMemory,
+                               m_bloomAuxView)) {
+        m_lastError = "createAttachmentImage (bloomAux) failed";
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Bloom descriptor layout + pool + 3 sets (threshold in, blur-H in, blur-V in).
+// Called once at init; updateBloomDescriptors() re-writes views after resize.
+// ---------------------------------------------------------------------------
+bool VkRenderer::createBloomDescriptors() {
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutCI{};
+    layoutCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutCI.bindingCount = 1;
+    layoutCI.pBindings = &binding;
+    if (vkCreateDescriptorSetLayout(m_device, &layoutCI, nullptr, &m_bloomSetLayout) != VK_SUCCESS) {
+        m_lastError = "vkCreateDescriptorSetLayout (bloom) failed";
+        return false;
+    }
+
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3};
+    VkDescriptorPoolCreateInfo poolCI{};
+    poolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolCI.maxSets = 3;
+    poolCI.poolSizeCount = 1;
+    poolCI.pPoolSizes = &poolSize;
+    if (vkCreateDescriptorPool(m_device, &poolCI, nullptr, &m_bloomPool) != VK_SUCCESS) {
+        m_lastError = "vkCreateDescriptorPool (bloom) failed";
+        return false;
+    }
+
+    const std::array<VkDescriptorSetLayout, 3> layouts{m_bloomSetLayout, m_bloomSetLayout, m_bloomSetLayout};
+    VkDescriptorSetAllocateInfo allocCI{};
+    allocCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocCI.descriptorPool = m_bloomPool;
+    allocCI.descriptorSetCount = 3;
+    allocCI.pSetLayouts = layouts.data();
+    VkDescriptorSet sets[3]{};
+    if (vkAllocateDescriptorSets(m_device, &allocCI, sets) != VK_SUCCESS) {
+        m_lastError = "vkAllocateDescriptorSets (bloom) failed";
+        return false;
+    }
+    m_bloomThresholdSet = sets[0];
+    m_bloomBlurHSet = sets[1];
+    m_bloomBlurVSet = sets[2];
+
+    updateBloomDescriptors();
+    return true;
+}
+
+void VkRenderer::updateBloomDescriptors() {
+    auto write = [&](VkDescriptorSet set, VkImageView view) {
+        VkDescriptorImageInfo imgInfo{};
+        imgInfo.sampler = m_hdrSampler; // linear, clamp-to-edge — same as tonemap
+        imgInfo.imageView = view;
+        imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet w{};
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = set;
+        w.dstBinding = 0;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.pImageInfo = &imgInfo;
+        vkUpdateDescriptorSets(m_device, 1, &w, 0, nullptr);
+    };
+    write(m_bloomThresholdSet, m_hdrView);  // threshold reads HDR
+    write(m_bloomBlurHSet, m_bloomView);    // blur H reads bloom → writes aux
+    write(m_bloomBlurVSet, m_bloomAuxView); // blur V reads aux → writes bloom
+}
+
+// ---------------------------------------------------------------------------
+// Bloom pipelines (threshold + separable blur).  Both use tonemap.vert
+// (fullscreen triangle) + their respective frag shaders.
+// ---------------------------------------------------------------------------
+bool VkRenderer::createBloomPipelines() {
+    auto vertCode = loadSpirv(m_shaderDir + "tonemap.vert.spv");
+    auto threshCode = loadSpirv(m_shaderDir + "bloom_threshold.frag.spv");
+    auto blurCode = loadSpirv(m_shaderDir + "bloom_blur.frag.spv");
+    if (vertCode.empty() || threshCode.empty() || blurCode.empty()) {
+        m_lastError = "failed to load bloom shader SPIR-V from: " + m_shaderDir;
+        return false;
+    }
+
+    VkShaderModule vertMod = createShaderModule(m_device, vertCode);
+    VkShaderModule threshMod = createShaderModule(m_device, threshCode);
+    VkShaderModule blurMod = createShaderModule(m_device, blurCode);
+
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.offset = 0;
+    pushRange.size = sizeof(BloomPush);
+
+    VkPipelineLayoutCreateInfo layoutCI{};
+    layoutCI.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutCI.setLayoutCount = 1;
+    layoutCI.pSetLayouts = &m_bloomSetLayout;
+    layoutCI.pushConstantRangeCount = 1;
+    layoutCI.pPushConstantRanges = &pushRange;
+    if (vkCreatePipelineLayout(m_device, &layoutCI, nullptr, &m_bloomLayout) != VK_SUCCESS) {
+        m_lastError = "vkCreatePipelineLayout (bloom) failed";
+        vkDestroyShaderModule(m_device, vertMod, nullptr);
+        vkDestroyShaderModule(m_device, threshMod, nullptr);
+        vkDestroyShaderModule(m_device, blurMod, nullptr);
+        return false;
+    }
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    const std::array<VkDynamicState, 2> dynamicStates = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+    dynamicState.pDynamicStates = dynamicStates.data();
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo noDepth{};
+    noDepth.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+
+    VkPipelineColorBlendAttachmentState blendAtt{};
+    blendAtt.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo colorBlend{};
+    colorBlend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlend.attachmentCount = 1;
+    colorBlend.pAttachments = &blendAtt;
+
+    VkFormat hdrFmt = kHdrFormat;
+    VkPipelineRenderingCreateInfo renderingCI{};
+    renderingCI.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    renderingCI.colorAttachmentCount = 1;
+    renderingCI.pColorAttachmentFormats = &hdrFmt;
+
+    auto makeStages = [](VkShaderModule v, VkShaderModule f) {
+        return std::array<VkPipelineShaderStageCreateInfo, 2>{{
+            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, v, "main",
+             nullptr},
+            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, f, "main",
+             nullptr},
+        }};
+    };
+
+    VkGraphicsPipelineCreateInfo pipelineCI{};
+    pipelineCI.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineCI.pNext = &renderingCI;
+    pipelineCI.pVertexInputState = &vertexInput;
+    pipelineCI.pInputAssemblyState = &inputAssembly;
+    pipelineCI.pViewportState = &viewportState;
+    pipelineCI.pRasterizationState = &rasterizer;
+    pipelineCI.pMultisampleState = &multisampling;
+    pipelineCI.pDepthStencilState = &noDepth;
+    pipelineCI.pColorBlendState = &colorBlend;
+    pipelineCI.pDynamicState = &dynamicState;
+    pipelineCI.layout = m_bloomLayout;
+    pipelineCI.renderPass = VK_NULL_HANDLE;
+
+    auto threshStages = makeStages(vertMod, threshMod);
+    pipelineCI.stageCount = 2;
+    pipelineCI.pStages = threshStages.data();
+    if (vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &pipelineCI, nullptr, &m_bloomThresholdPipeline) !=
+        VK_SUCCESS) {
+        m_lastError = "vkCreateGraphicsPipelines (bloom threshold) failed";
+        vkDestroyShaderModule(m_device, vertMod, nullptr);
+        vkDestroyShaderModule(m_device, threshMod, nullptr);
+        vkDestroyShaderModule(m_device, blurMod, nullptr);
+        return false;
+    }
+
+    auto blurStages = makeStages(vertMod, blurMod);
+    pipelineCI.pStages = blurStages.data();
+    if (vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1, &pipelineCI, nullptr, &m_bloomBlurPipeline) !=
+        VK_SUCCESS) {
+        m_lastError = "vkCreateGraphicsPipelines (bloom blur) failed";
+        vkDestroyShaderModule(m_device, vertMod, nullptr);
+        vkDestroyShaderModule(m_device, threshMod, nullptr);
+        vkDestroyShaderModule(m_device, blurMod, nullptr);
+        return false;
+    }
+
+    vkDestroyShaderModule(m_device, vertMod, nullptr);
+    vkDestroyShaderModule(m_device, threshMod, nullptr);
+    vkDestroyShaderModule(m_device, blurMod, nullptr);
+    return true;
+}
+
+void VkRenderer::destroyBloomResources() {
+    auto destroyPipeline = [this](VkPipeline& p) {
+        if (p != VK_NULL_HANDLE) {
+            vkDestroyPipeline(m_device, p, nullptr);
+            p = VK_NULL_HANDLE;
+        }
+    };
+    destroyPipeline(m_bloomThresholdPipeline);
+    destroyPipeline(m_bloomBlurPipeline);
+    if (m_bloomLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(m_device, m_bloomLayout, nullptr);
+        m_bloomLayout = VK_NULL_HANDLE;
+    }
+    if (m_bloomPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(m_device, m_bloomPool, nullptr);
+        m_bloomPool = VK_NULL_HANDLE;
+        m_bloomThresholdSet = VK_NULL_HANDLE;
+        m_bloomBlurHSet = VK_NULL_HANDLE;
+        m_bloomBlurVSet = VK_NULL_HANDLE;
+    }
+    if (m_bloomSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(m_device, m_bloomSetLayout, nullptr);
+        m_bloomSetLayout = VK_NULL_HANDLE;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// recordBloomPasses — brightness threshold + separable Gaussian blur.
+// On entry: HDR is SHADER_READ_ONLY (transitioned before this call).
+// On exit:  m_bloomImage is SHADER_READ_ONLY (ready for tonemap composite).
+// ---------------------------------------------------------------------------
+void VkRenderer::recordBloomPasses(VkCommandBuffer cmd) {
+    const uint32_t bw = std::max(1u, m_swapchainExtent.width / 2);
+    const uint32_t bh = std::max(1u, m_swapchainExtent.height / 2);
+    const VkExtent2D bloomExtent{bw, bh};
+    const VkViewport bloomVP{0.0f, 0.0f, float(bw), float(bh), 0.0f, 1.0f};
+    const VkRect2D bloomScissor{{0, 0}, bloomExtent};
+
+    BloomPush pc{};
+    pc.texelSizeX = 1.0f / float(bw);
+    pc.texelSizeY = 1.0f / float(bh);
+
+    auto beginBloomPass = [&](VkCommandBuffer c, VkImageView target) {
+        VkRenderingAttachmentInfo att{};
+        att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        att.imageView = target;
+        att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        att.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo ri{};
+        ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea = {{0, 0}, bloomExtent};
+        ri.layerCount = 1;
+        ri.colorAttachmentCount = 1;
+        ri.pColorAttachments = &att;
+        vkCmdBeginRendering(c, &ri);
+        vkCmdSetViewport(c, 0, 1, &bloomVP);
+        vkCmdSetScissor(c, 0, 1, &bloomScissor);
+    };
+
+    // ── Threshold: HDR (SHADER_READ_ONLY) → bloom (UNDEFINED → COLOR_ATT) ─
+    imageBarrier(cmd, m_bloomImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+
+    beginBloomPass(cmd, m_bloomView);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomThresholdPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomLayout, 0, 1, &m_bloomThresholdSet, 0,
+                            nullptr);
+    pc.isVertical = 0u;
+    vkCmdPushConstants(cmd, m_bloomLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(BloomPush), &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
+
+    // ── Blur H: bloom (COLOR_ATT → SHADER_READ) → aux (UNDEF → COLOR_ATT) ─
+    imageBarrier(cmd, m_bloomImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    imageBarrier(cmd, m_bloomAuxImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+
+    beginBloomPass(cmd, m_bloomAuxView);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomBlurPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomLayout, 0, 1, &m_bloomBlurHSet, 0, nullptr);
+    pc.isVertical = 0u;
+    vkCmdPushConstants(cmd, m_bloomLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(BloomPush), &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
+
+    // ── Blur V: aux (COLOR_ATT → SHADER_READ) → bloom (SHADER_READ → COLOR_ATT → SHADER_READ) ─
+    imageBarrier(cmd, m_bloomAuxImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                 VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    imageBarrier(cmd, m_bloomImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                 VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+
+    beginBloomPass(cmd, m_bloomView);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomLayout, 0, 1, &m_bloomBlurVSet, 0, nullptr);
+    pc.isVertical = 1u;
+    vkCmdPushConstants(cmd, m_bloomLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(BloomPush), &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
+
+    // ── bloom (COLOR_ATT) → SHADER_READ_ONLY for tonemap composite ────────
+    imageBarrier(cmd, m_bloomImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+}
+
+// ---------------------------------------------------------------------------
 // recordCommandBuffer
 // ---------------------------------------------------------------------------
 void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
@@ -2688,6 +3198,86 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         vkCmdEndRendering(cmd);
     }
 
+    // ── Transparent pass — alpha-blended items sorted back-to-front ───────
+    {
+        // Collect transparent render items (material.alphaBlend == true).
+        std::vector<uint32_t> transIndices;
+        const auto& items = m_pendingScene.renderItems;
+        for (uint32_t i = 0; i < static_cast<uint32_t>(items.size()); ++i) {
+            const GpuMaterial* mat = m_resources.getMaterial(items[i].material);
+            if (mat && mat->alphaBlend)
+                transIndices.push_back(i);
+        }
+
+        if (!transIndices.empty()) {
+            // Sort back-to-front (descending squared distance) for correct blending.
+            std::sort(transIndices.begin(), transIndices.end(), [&](uint32_t a, uint32_t b) {
+                const glm::vec3 ta(items[a].transform[3]);
+                const glm::vec3 tb(items[b].transform[3]);
+                return glm::dot(ta, ta) > glm::dot(tb, tb);
+            });
+
+            VkRenderingAttachmentInfo colorAtt{};
+            colorAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            colorAtt.imageView = m_hdrView;
+            colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            colorAtt.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            colorAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+            VkRenderingAttachmentInfo depthAtt{};
+            depthAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            depthAtt.imageView = m_depthView;
+            depthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            depthAtt.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            depthAtt.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+
+            VkRenderingInfo renderInfo{};
+            renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            renderInfo.renderArea = {{0, 0}, m_swapchainExtent};
+            renderInfo.layerCount = 1;
+            renderInfo.colorAttachmentCount = 1;
+            renderInfo.pColorAttachments = &colorAtt;
+            renderInfo.pDepthAttachment = &depthAtt;
+
+            vkCmdBeginRendering(cmd, &renderInfo);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardAlphaPipeline);
+
+            VkViewport viewport{
+                0.0f, 0.0f, static_cast<float>(m_swapchainExtent.width), static_cast<float>(m_swapchainExtent.height),
+                0.0f, 1.0f};
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+            VkRect2D scissor{{0, 0}, m_swapchainExtent};
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 0, 1,
+                                    &m_perFrame[m_currentFrame].descriptorSet, 0, nullptr);
+
+            for (uint32_t idx : transIndices) {
+                const RenderItem& item = items[idx];
+                const GpuMesh* mesh = m_resources.getMesh(item.mesh);
+                if (!mesh)
+                    continue;
+                const GpuMaterial* mat = m_resources.getMaterial(item.material);
+                if (mat && mat->descriptorSet != VK_NULL_HANDLE)
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_forwardLayout, 1, 1,
+                                            &mat->descriptorSet, 0, nullptr);
+                ForwardPushConstants pc{};
+                pc.model = item.transform;
+                pc.baseColorFactor = mat ? mat->baseColorFactor : glm::vec4(1.0f);
+                pc.metallicFactor = mat ? mat->metallicFactor : 0.0f;
+                pc.roughnessFactor = mat ? mat->roughnessFactor : 1.0f;
+                vkCmdPushConstants(cmd, m_forwardLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                   sizeof(pc), &pc);
+                const VkDeviceSize offset = 0;
+                vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->vertexBuffer, &offset);
+                vkCmdBindIndexBuffer(cmd, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(cmd, mesh->indexCount, 1, 0, 0, 0);
+            }
+
+            vkCmdEndRendering(cmd);
+        }
+    }
+
     // ── HDR → SHADER_READ_ONLY ───────────────────────────────────────────
     imageBarrier(cmd, m_hdrImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
@@ -2698,7 +3288,11 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
 
-    // ── Tonemap pass ──────────────────────────────────────────────────────
+    // ── Bloom passes (threshold → blur H → blur V) ────────────────────────
+    if (m_settings.bloom)
+        recordBloomPasses(cmd);
+
+    // ── Tonemap pass (Khronos PBR Neutral + optional FXAA + bloom blend) ─
     {
         VkRenderingAttachmentInfo colorAtt{};
         colorAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -2724,6 +3318,13 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         VkRect2D scissor{{0, 0}, m_swapchainExtent};
         vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+        TonemapPush pc{};
+        pc.texelSizeX = 1.0f / static_cast<float>(m_swapchainExtent.width);
+        pc.texelSizeY = 1.0f / static_cast<float>(m_swapchainExtent.height);
+        pc.enableFxaa = m_settings.antiAliasing ? 1u : 0u;
+        pc.bloomStrength = m_settings.bloom ? 0.04f : 0.0f;
+        vkCmdPushConstants(cmd, m_tonemapLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 
         vkCmdDraw(cmd, 3, 1, 0, 0); // fullscreen triangle
         vkCmdEndRendering(cmd);
@@ -2794,7 +3395,10 @@ bool VkRenderer::recreateSwapchain() {
         return false;
     if (!createHdrImage())
         return false;
+    if (!createBloomImages())
+        return false;
     updateHdrDescriptor();
+    updateBloomDescriptors();
 
     m_imagesInFlight.assign(m_swapchainImages.size(), VK_NULL_HANDLE);
     return true;

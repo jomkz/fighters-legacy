@@ -7,6 +7,25 @@
 #include <string_view>
 
 // ---------------------------------------------------------------------------
+// Renderer settings — platform-agnostic subset of GraphicsSettings used by
+// IRenderer::applySettings().  Populated from engine/config/GraphicsSettings.h
+// in main.cpp so that platform/ headers remain free of engine/ dependencies.
+// ---------------------------------------------------------------------------
+
+enum class RendererVsyncMode : uint8_t {
+    Off,      // prefer IMMEDIATE, fallback MAILBOX, fallback FIFO
+    On,       // always FIFO (guaranteed vsync)
+    Adaptive, // prefer FIFO_RELAXED, fallback FIFO
+};
+
+struct RendererSettings {
+    RendererVsyncMode vsync{RendererVsyncMode::On};
+    bool antiAliasing{true};     // FXAA on/off
+    bool bloom{true};            // bloom on/off
+    float drawDistanceKm{50.0f}; // entity cull distance in km (used by SceneRenderer)
+};
+
+// ---------------------------------------------------------------------------
 // Resource upload descriptors.
 //
 // These are byte-blob views into data produced by IContentPack (engine/content/

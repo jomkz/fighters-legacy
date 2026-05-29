@@ -480,4 +480,5 @@ struct MockRenderer : public IRenderer {
         ++setSceneCount;
         lastScene = scene;
     }
+    void applySettings(const RendererSettings&) override {}
 };
