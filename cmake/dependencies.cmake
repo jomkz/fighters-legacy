@@ -83,6 +83,46 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# tinygltf — header-only glTF 2.0 loader; system preferred, FetchContent fallback
+# Used only by tools/validate-mesh.
+# ---------------------------------------------------------------------------
+find_package(tinygltf QUIET)
+if(tinygltf_FOUND)
+    message(STATUS "tinygltf: system (${tinygltf_VERSION})")
+else()
+    message(STATUS "tinygltf: FetchContent")
+    FetchContent_Declare(tinygltf
+        GIT_REPOSITORY https://github.com/syoyo/tinygltf.git
+        GIT_TAG        v2.9.3
+        GIT_SHALLOW    TRUE
+        SYSTEM
+    )
+    FetchContent_MakeAvailable(tinygltf)
+endif()
+
+# ---------------------------------------------------------------------------
+# yaml-cpp — YAML parser; system preferred, FetchContent fallback
+# Used only by tools/validate-mission.
+# ---------------------------------------------------------------------------
+find_package(yaml-cpp 0.8 QUIET)
+if(yaml-cpp_FOUND)
+    message(STATUS "yaml-cpp: system (${yaml-cpp_VERSION})")
+else()
+    message(STATUS "yaml-cpp: FetchContent")
+    set(YAML_CPP_BUILD_TESTS       OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_TOOLS       OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_CONTRIB     OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(yaml-cpp
+        GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+        GIT_TAG        0.8.0
+        GIT_SHALLOW    TRUE
+        SYSTEM
+    )
+    FetchContent_MakeAvailable(yaml-cpp)
+endif()
+
+# ---------------------------------------------------------------------------
 # tomlplusplus — header-only TOML parser; system preferred, FetchContent fallback
 # Used by engine/content/ModLoader to parse mod manifests.
 # ---------------------------------------------------------------------------
