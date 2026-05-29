@@ -94,6 +94,20 @@ std::optional<AIScript> FolderContentPack::loadAIScript(const char* name) {
     return loadBytes<AIScript>(name, AssetType::AIScript);
 }
 
+std::optional<std::string> FolderContentPack::loadConfig(const char* name) const {
+    std::string path = m_modDir + "/data/" + name;
+    if (!m_fs.fileExists(PathDomain::Assets, path.c_str()))
+        return std::nullopt;
+    int handle = m_fs.openFile(PathDomain::Assets, path.c_str(), false);
+    if (handle < 0)
+        return std::nullopt;
+    std::size_t size = m_fs.getFileSize(handle);
+    std::string content(size, '\0');
+    m_fs.readFile(handle, content.data(), size);
+    m_fs.closeFile(handle);
+    return content;
+}
+
 std::vector<std::string> FolderContentPack::listAssets(AssetType type) const {
     const auto& info = kAssetPaths[static_cast<uint8_t>(type)];
     std::string dir = m_modDir + "/" + info.subdir;

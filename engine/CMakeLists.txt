@@ -79,6 +79,16 @@ add_library(engine-loop STATIC
 target_include_directories(engine-loop PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-loop PUBLIC platform-hal)
 
+add_library(engine-difficulty STATIC
+    difficulty/DifficultyMultipliers.cpp
+)
+target_include_directories(engine-difficulty PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(engine-difficulty
+    PUBLIC  engine-config
+    PRIVATE engine-content
+            tomlplusplus::tomlplusplus
+)
+
 add_library(engine-flight STATIC
     flight/Atmosphere.cpp
     flight/FlightModelParser.cpp

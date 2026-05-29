@@ -53,6 +53,8 @@ class FolderContentPack final : public IContentPack {
 
     std::vector<std::string> listAssets(AssetType type) const override;
 
+    std::optional<std::string> loadConfig(const char* name) const override;
+
   private:
     // Returns the asset file path for the given name and type, trying the primary
     // extension first. Returns an empty string if neither extension exists.

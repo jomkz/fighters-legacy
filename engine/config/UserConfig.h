@@ -3,6 +3,7 @@
 
 #include "ILogger.h"
 #include "config/AudioSettings.h"
+#include "config/DifficultySettings.h"
 #include "config/GraphicsSettings.h"
 
 class IFilesystem;
@@ -34,6 +35,9 @@ class UserConfig {
     AudioSettings audio() const;
     void setAudio(const AudioSettings& as);
 
+    DifficultySettings difficulty() const;
+    void setDifficulty(const DifficultySettings& ds);
+
   private:
     static constexpr const char* kPath = "config/user.toml";
     static constexpr const char* kTmpPath = "config/user.toml.tmp";
@@ -44,4 +48,5 @@ class UserConfig {
     LogLevel m_logLevel{LogLevel::Info};
     GraphicsSettings m_graphics{};
     AudioSettings m_audio{};
+    DifficultySettings m_difficulty{};
 };
