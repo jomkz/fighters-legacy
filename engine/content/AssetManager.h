@@ -35,6 +35,7 @@ class AssetManager {
     std::shared_ptr<MissionData> loadMission(const char* name);
     std::shared_ptr<TerrainData> loadTerrain(const char* name);
     std::shared_ptr<AIScript> loadAIScript(const char* name);
+    std::shared_ptr<EntityDefData> loadEntityDef(const char* name);
 
     // Walks the priority stack. Returns the raw text of the first pack
     // that returns non-nullopt for loadConfig(name). Not cached.

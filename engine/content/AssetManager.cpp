@@ -93,6 +93,9 @@ std::shared_ptr<TerrainData> AssetManager::loadTerrain(const char* name) {
 std::shared_ptr<AIScript> AssetManager::loadAIScript(const char* name) {
     return loadAsset<AIScript>(AssetType::AIScript, name, &IContentPack::loadAIScript);
 }
+std::shared_ptr<EntityDefData> AssetManager::loadEntityDef(const char* name) {
+    return loadAsset<EntityDefData>(AssetType::EntityDef, name, &IContentPack::loadEntityDef);
+}
 
 std::optional<std::string> AssetManager::loadConfig(const char* name) {
     for (auto& pack : m_packs) {
