@@ -4,6 +4,7 @@
 #include "RenderTypes.h"
 
 #include <functional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -11,6 +12,7 @@
 class AssetManager;
 class IRenderer;
 namespace fl {
+class ParticleSystem;
 class SimRenderBridge;
 } // namespace fl
 
@@ -32,13 +34,25 @@ class SceneRenderer {
     using MeshNameResolver =
         std::function<bool(uint32_t typeIndex, std::string& meshName, std::string& damageMeshName)>;
 
+    // Given a typeIndex and damageLevel (uint8_t cast of DamageLevel), returns the visual
+    // effect preset name, or empty string if none.  Used to emit particle effects from
+    // damaged entities without introducing a CMake dep on engine-entity.
+    using EffectResolver = std::function<std::string(uint32_t typeIndex, uint8_t damageLevel)>;
+
     SceneRenderer(SimRenderBridge& bridge, MeshNameResolver resolver, AssetManager& assets, IRenderer& renderer);
     ~SceneRenderer();
+
+    // Optional: wire a ParticleSystem to emit per-entity damage effects each frame.
+    // effectResolver is called for each entity with damageLevel > 0; the returned preset
+    // name is forwarded to ParticleSystem::emit(). Pass nullptr/empty to disable.
+    void setParticleSystem(ParticleSystem* ps, EffectResolver effectResolver) noexcept;
 
     // Advance to the latest sim snapshot and submit a FrameScene to the renderer.
     // Must be called between IRenderer::beginFrame() and endFrame().
     // alpha — render-interpolation factor from GameLoop::shellTick(), in [0, 1].
-    void renderFrame(float alpha, const CameraView& camera, const EnvironmentState& env);
+    // extraEmitters — additional emitters beyond entity damage effects (may be empty).
+    void renderFrame(float alpha, const CameraView& camera, const EnvironmentState& env,
+                     std::span<const ParticleEmitterState> extraEmitters = {});
 
   private:
     MeshHandle getOrUploadMesh(const std::string& name);
@@ -48,6 +62,9 @@ class SceneRenderer {
     MeshNameResolver m_resolver;
     AssetManager& m_assets;
     IRenderer& m_renderer;
+
+    ParticleSystem* m_particleSystem{nullptr};
+    EffectResolver m_effectResolver;
 
     // Per-typeIndex resolved names, cached so the resolver is called at most once per type.
     std::unordered_map<uint32_t, std::pair<std::string, std::string>> m_typeNameCache;

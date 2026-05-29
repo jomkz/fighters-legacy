@@ -10,7 +10,7 @@ Cross-platform: Windows 10/11, Linux, macOS. Phase 2 (Modern-Particles Engine) i
 ```
 engine/         — core: content system, asset manager, IContentPack interface
 engine/entity/  — entity/object system: pool, type registry, damage model, EntityManager
-engine/render/  — sim→render bridge + scene submission: RenderSnapshot, SimRenderBridge, SceneRenderer, CameraController
+engine/render/  — sim→render bridge + scene submission: RenderSnapshot, SimRenderBridge, SceneRenderer, CameraController, ParticleSystem
 platform/       — HAL: Vulkan, SDL3, OpenAL Soft, ENet backends
 platform/RenderTypes.h — GPU-agnostic scene types shared across the HAL boundary
 game/           — fighters-legacy game binary
@@ -27,12 +27,13 @@ FA support lives in jomkz/fa-content. No FA-specific code belongs in this repo.
 
 ### Renderer architecture (Phase 2)
 
-`VkRenderer` (platform/vulkan/) uses Vulkan 1.3 dynamic rendering (`VK_KHR_dynamic_rendering`) — no `VkRenderPass` or `VkFramebuffer` objects. Four passes per frame:
+`VkRenderer` (platform/vulkan/) uses Vulkan 1.3 dynamic rendering (`VK_KHR_dynamic_rendering`) — no `VkRenderPass` or `VkFramebuffer` objects. Five steps per frame (one compute dispatch + four rendering scopes):
 
 1. **Shadow** — `kNumCascades=4` PSSM cascades rendered into a `kShadowRes=2048` 2D depth array (`VK_FORMAT_D32_SFLOAT`, **forward-Z**, depth clear = 1.0). Cascade matrices computed via tight bounding-sphere fit; PCF comparison sampler (`VK_COMPARE_OP_LESS_OR_EQUAL`). `ShadowUBO` bound at set 0, binding 2; `sampler2DArrayShadow` at set 0, binding 3.
-2. **Forward** — Cook-Torrance PBR (GGX NDF, Smith geometry, Schlick Fresnel) with normal maps + ORM textures (set 1: base color / normal / ORM at bindings 0–2). Geometry into HDR offscreen (`VK_FORMAT_R16G16B16A16_SFLOAT`) with **reverse-Z** depth (`VK_FORMAT_D32_SFLOAT`, far = 0.0, depth clear = 0.0, compare = GREATER).
-3. **Sky** — gradient + sun disc via fullscreen triangle (`tonemap.vert`) with `GREATER_OR_EQUAL` depth test, depth write off; renders only where depth == 0.0 (reverse-Z far, no geometry drawn). `SkyPushConstants` (96 bytes, fragment only): `invViewProj + sunDirection + sunColor`.
-4. **Tonemap** — Khronos PBR Neutral, fullscreen HDR → swapchain (`B8G8R8A8_SRGB`).
+2. **Particle compute** — `particle_sim.comp` dispatched before forward pass; advances age/pos for `kMaxParticles=8192` slots (local_size_x=64). New particles written to a host-visible spawn staging buffer by CPU each frame then `vkCmdCopyBuffer`'d into the device-local pool SSBO (ring-buffer overwrite). Push constant `{dt, count, gravity, _pad}` (16 bytes). Barrier: COMPUTE_WRITE → VERTEX_SHADER_READ before forward pass.
+3. **Forward** — Cook-Torrance PBR (GGX NDF, Smith geometry, Schlick Fresnel) with normal maps + ORM textures (set 1: base color / normal / ORM at bindings 0–2). Geometry into HDR offscreen (`VK_FORMAT_R16G16B16A16_SFLOAT`) with **reverse-Z** depth (`VK_FORMAT_D32_SFLOAT`, far = 0.0, depth clear = 0.0, compare = GREATER). Depth storeOp = STORE (sky + particle pass reads depth).
+4. **Sky + particles** — combined rendering scope: sky fullscreen triangle (GREATER_OR_EQUAL, depth write off) followed by particle billboard draw (GREATER, depth write off, depth test on). Two instanced draws (`vkCmdDraw(6, kMaxParticles, 0, 0)`): additive pipeline (fire/explosion) then alpha pipeline (smoke). `particle.vert` reads particle SSBO and camera UBO from set 0 (bindings 0–1); push constant `uint32_t renderAdditive` selects which blend-mode particles to emit (others output degenerate off-screen positions).
+5. **Tonemap** — Khronos PBR Neutral, fullscreen HDR → swapchain (`B8G8R8A8_SRGB`).
 
 **Note:** shadow passes use forward-Z (near=0, far=1); scene depth uses reverse-Z. These are independent depth spaces.
 
@@ -59,12 +60,24 @@ Runtime shader discovery: `VkRenderer::resolveShaderDir()` tries `SDL_GetBasePat
 `engine/render/SceneRenderer` converts the per-tick entity snapshot into a `FrameScene` and calls `IRenderer::setScene` each frame. All work is main-thread.
 
 - **MeshNameResolver**: `std::function<bool(uint32_t typeIndex, std::string& mesh, std::string& dmg)>` — injected at construction to avoid a circular CMake dep between `engine-render` and `engine-entity`. In `main.cpp` the lambda captures `EntityTypeRegistry&`.
+- **EffectResolver**: `std::function<std::string(uint32_t typeIndex, uint8_t damageLevel)>` — optional; injected via `setParticleSystem(ParticleSystem*, EffectResolver)`. Called for each entity with `damageLevel > 0`; returns the particle preset name (e.g. `"explosion"`) or empty string. In `main.cpp` reads `EntityDef::damage` through the registry.
 - **Mesh/material cache**: `getOrUploadMesh` / `getOrUploadMaterial` call `IRenderer::createMesh` / `createMaterial` once per unique mesh name; subsequent frames use the cached handle.
 - **Camera-relative rendering**: entity world position is rebased to `camera.worldOrigin` before the transform matrix is built — float32-safe at arbitrary theater scale.
 - **Velocity extrapolation**: `rendered_pos = entry.position + entry.velocity * (alpha * kTickDt)` where `alpha = GameLoop::shellTick()` and `kTickDt = 1/60 s`.
 - **Damage variant**: if `entry.damageLevel > 0` and `EntityDef::classicDamageMesh` is non-empty, the damage mesh is loaded instead; `kRenderFlagDamaged` is set on the `RenderItem`.
 - **Sort**: opaque items sorted front-to-back by squared camera-relative distance to minimise overdraw.
-- `SceneRenderer::renderFrame(alpha, camera, env)` calls `tryAdvance()` internally; callers must NOT also call `renderBridge.tryAdvance()`.
+- `SceneRenderer::renderFrame(alpha, camera, env, extraEmitters={})` calls `tryAdvance()` internally; callers must NOT also call `renderBridge.tryAdvance()`. `extraEmitters` is merged with entity-damage effects when a ParticleSystem is set.
+
+### GPU particle system (Phase 2, PR 6)
+
+`engine/render/ParticleSystem` manages per-frame emitter emission on the CPU. `VkRenderer` handles GPU simulation and rendering.
+
+- **ParticlePreset** (`engine/render/ParticleSystem.h`): spawnRate, particleLifetime, initialSpeed, colorStart/End, sizeStart/End, additive flag.
+- `ParticleSystem::registerPreset(name, preset)` — register by name. `emit(name, worldPos, intensity=1)` fills a `ParticleEmitterState` from the preset and appends to the per-frame list. `reset()` + `emitters()` follow the per-frame accumulate-then-read pattern.
+- **GPU pool**: `kMaxParticles=8192` slots in a device-local SSBO (`GpuParticle` — 80 bytes: pos+age, vel+maxAge, colorStart, colorEnd, sizeStart/sizeEnd/additive/_pad). Ring-buffer spawn: CPU writes up to `kMaxSpawnPerFrame=512` new particles to a per-frame host-visible staging buffer, `vkCmdCopyBuffer` into the pool.
+- **Compute**: `particle_sim.comp` (local_size_x=64) decrements age, advances pos by vel×dt, applies gravity. Dead particles (age≤0) written as zero and skipped in vertex shader.
+- **Render**: `particle.vert` reads SSBO (set 0 binding 0) + camera UBO (set 0 binding 1); emits a 6-vertex camera-facing quad per instance (2 triangles). `particle.frag` outputs circular soft-edge colour with quadratic alpha falloff. Push constant `uint32_t renderAdditive` selects which particles each draw pass processes.
+- **DamageDef.visualEffect hook**: `DamagePenalty::visualEffect` (string in `DamageDef`) is the preset name emitted by `SceneRenderer` via `EffectResolver` when an entity is damaged.
 
 `engine/render/CameraController` produces a `CameraView` each frame.
 
@@ -93,6 +106,7 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 - DCO sign-off required: `git commit -s`
 <!-- REUSE-IgnoreStart -->
 - SPDX header required on all new .cpp/.h files: `// SPDX-License-Identifier: GPL-3.0-or-later`
+- Shader files (`.vert`, `.frag`, `.comp`, `.glsl`) are covered by REUSE.toml — no inline SPDX needed, but **add any new shader extension to REUSE.toml** or the REUSE CI step will fail.
 <!-- REUSE-IgnoreEnd -->
 - All code must compile on Windows (MSVC 2022), Linux (GCC/Clang), macOS (Apple Clang)
 - `CMAKE_COMPILE_WARNING_AS_ERROR=ON` in debug builds — fix all warnings
@@ -107,7 +121,8 @@ See docs/development.md for prerequisites (Vulkan SDK, SDL3, OpenAL, ENet, Catch
 - `platform/RenderTypes.h` — GPU-agnostic POD types: `MeshHandle`, `TextureHandle`, `MaterialHandle`, `CameraView`, `RenderItem`, `FrameScene`, `EnvironmentState`, `ParticleEmitterState`
 - `engine/render/RenderSnapshot.h` — `EntityRenderEntry` + `RenderSnapshot`; POD only, no engine-entity headers (uses raw uint32_t/uint8_t to avoid circular deps)
 - `engine/render/SimRenderBridge.h` — lock-free triple-buffer bridge; `publish()` sim-thread-only, `tryAdvance()`/`current()`/`hasSnapshot()` render-thread-only
-- `engine/render/SceneRenderer.h` — snapshot→FrameScene bridge; `renderFrame(alpha, camera, env)` between beginFrame/endFrame; handles mesh upload/cache, camera-relative transforms, damage variant, front-to-back sort
+- `engine/render/SceneRenderer.h` — snapshot→FrameScene bridge; `renderFrame(alpha, camera, env, extraEmitters={})` between beginFrame/endFrame; handles mesh upload/cache, camera-relative transforms, damage variant, front-to-back sort; `setParticleSystem(ps, effectResolver)` wires damage-effect emission
 - `engine/render/CameraController.h` — Free-orbit + Chase cameras; `view(aspectRatio)` → `CameraView`; infinite reverse-Z projection with Vulkan Y-flip
+- `engine/render/ParticleSystem.h` — `ParticlePreset` + `ParticleSystem`; preset registry, per-frame emit/reset/emitters() accumulator; `DamagePenalty::visualEffect` maps to preset name
 - `cmake/dependencies.cmake` — all FetchContent declarations; GLM is unconditional, Vulkan-specific deps are gated on `Vulkan_FOUND`
 - `platform/vulkan/VkRendererFactory.h` — thin factory header; only include needed by game/tools to instantiate the renderer

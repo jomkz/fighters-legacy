@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "render/SceneRenderer.h"
+#include "render/ParticleSystem.h"
 #include "render/RenderSnapshot.h"
 #include "render/SimRenderBridge.h"
 
 #include "content/AssetManager.h"
-#include "content/AssetTypes.h"
 
 #include "IRenderer.h"
 
@@ -21,14 +21,24 @@ SceneRenderer::SceneRenderer(SimRenderBridge& bridge, MeshNameResolver resolver,
 
 SceneRenderer::~SceneRenderer() = default;
 
-void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const EnvironmentState& env) {
+void SceneRenderer::setParticleSystem(ParticleSystem* ps, EffectResolver effectResolver) noexcept {
+    m_particleSystem = ps;
+    m_effectResolver = std::move(effectResolver);
+}
+
+void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const EnvironmentState& env,
+                                std::span<const ParticleEmitterState> extraEmitters) {
     m_bridge.tryAdvance();
     m_items.clear();
+
+    if (m_particleSystem)
+        m_particleSystem->reset();
 
     if (!m_bridge.hasSnapshot()) {
         FrameScene scene{};
         scene.camera = camera;
         scene.environment = env;
+        scene.particleEmitters = extraEmitters;
         m_renderer.setScene(scene);
         return;
     }
@@ -76,6 +86,17 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
         m_items.push_back(item);
     }
 
+    // Emit per-entity damage particle effects (uses snapshot positions — thread-safe).
+    if (m_particleSystem && m_effectResolver) {
+        for (const auto& entry : snap.entries) {
+            if (entry.damageLevel == 0)
+                continue;
+            std::string effect = m_effectResolver(entry.typeIndex, entry.damageLevel);
+            if (!effect.empty())
+                m_particleSystem->emit(effect.c_str(), entry.position);
+        }
+    }
+
     // Sort front-to-back by squared camera-relative distance to minimise overdraw.
     std::sort(m_items.begin(), m_items.end(), [](const RenderItem& a, const RenderItem& b) {
         // transform[3] is the translation column (glm is column-major).
@@ -86,10 +107,16 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
         return da < db;
     });
 
+    // Merge entity damage effects (if any) with caller-supplied extra emitters.
+    std::span<const ParticleEmitterState> emitters = extraEmitters;
+    if (m_particleSystem && !m_particleSystem->emitters().empty())
+        emitters = m_particleSystem->emitters();
+
     FrameScene scene{};
     scene.camera = camera;
     scene.renderItems = m_items;
     scene.environment = env;
+    scene.particleEmitters = emitters;
     m_renderer.setScene(scene);
 }
 

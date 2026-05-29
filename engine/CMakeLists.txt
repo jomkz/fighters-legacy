@@ -64,6 +64,7 @@ add_library(engine-render STATIC
     render/SimRenderBridge.cpp
     render/CameraController.cpp
     render/SceneRenderer.cpp
+    render/ParticleSystem.cpp
 )
 
 target_include_directories(engine-render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

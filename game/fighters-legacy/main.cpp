@@ -15,6 +15,7 @@
 #include "loop/GameLoop.h"
 #include "openal/OALAudio.h"
 #include "render/CameraController.h"
+#include "render/ParticleSystem.h"
 #include "render/SceneRenderer.h"
 #include "render/SimRenderBridge.h"
 #include "sandbox/SandboxInspector.h"
@@ -189,7 +190,17 @@ int main(int argc, char** argv) {
     fl::SimRenderBridge renderBridge;
     entityManager.setRenderBridge(&renderBridge);
 
-    // Step 17b.1: Scene renderer — converts entity snapshots to FrameScene each frame.
+    // Step 17b.1: Particle system — preset registry + per-frame emitter accumulation.
+    fl::ParticleSystem particleSystem;
+    // Built-in presets covering the roadmap.md:68 acceptance criteria.
+    particleSystem.registerPreset("explosion",
+                                  {200.0f, 1.5f, 15.0f, {1.0f, 0.6f, 0.1f}, {0.4f, 0.2f, 0.1f}, 0.3f, 3.0f, true});
+    particleSystem.registerPreset("fire",
+                                  {120.0f, 2.0f, 8.0f, {1.0f, 0.4f, 0.05f}, {0.6f, 0.1f, 0.0f}, 0.2f, 1.5f, true});
+    particleSystem.registerPreset("smoke",
+                                  {60.0f, 4.0f, 3.0f, {0.4f, 0.4f, 0.4f}, {0.15f, 0.15f, 0.15f}, 0.5f, 3.0f, false});
+
+    // Step 17b.2: Scene renderer — converts entity snapshots to FrameScene each frame.
     // MeshNameResolver breaks the circular dep between engine-render and engine-entity:
     // the lambda captures entityRegistry (main-thread-only, read-only after start()).
     fl::CameraController cameraController;
@@ -203,6 +214,30 @@ int main(int argc, char** argv) {
                                         return true;
                                     },
                                     assets, *p.renderer};
+
+    // Wire the particle system so damaged entities emit effects each frame.
+    // EffectResolver uses the snapshot typeIndex + damageLevel without touching sim-thread state.
+    sceneRenderer.setParticleSystem(&particleSystem,
+                                    [&entityRegistry](uint32_t idx, uint8_t damageLevel) -> std::string {
+                                        const fl::EntityDef* def = entityRegistry.byIndex(idx);
+                                        if (!def || !def->damage)
+                                            return {};
+                                        const fl::DamagePenalty* pen = nullptr;
+                                        switch (static_cast<fl::DamageLevel>(damageLevel)) {
+                                        case fl::DamageLevel::Light:
+                                            pen = &def->damage->light;
+                                            break;
+                                        case fl::DamageLevel::Heavy:
+                                            pen = &def->damage->heavy;
+                                            break;
+                                        case fl::DamageLevel::Critical:
+                                            pen = &def->damage->critical;
+                                            break;
+                                        default:
+                                            break;
+                                        }
+                                        return pen ? pen->visualEffect : std::string{};
+                                    });
 
     // Step 17c: Sandbox inspector (when no content packs are present).
     std::optional<SandboxInspector> inspector;

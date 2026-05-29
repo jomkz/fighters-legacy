@@ -15,6 +15,11 @@ static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 static constexpr uint32_t kNumCascades = 4;
 static constexpr uint32_t kShadowRes = 2048;
 
+// Maximum live particles in the pool across all emitters.
+static constexpr uint32_t kMaxParticles = 8192;
+// Maximum new particles spawned per frame (ring-buffer overwrite past this).
+static constexpr uint32_t kMaxSpawnPerFrame = 512;
+
 // Depth format: D32_SFLOAT, reverse-Z (near→1.0, far→0.0; clear = 0.0; compare = GREATER).
 static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 // HDR offscreen color format.
@@ -66,6 +71,31 @@ struct SkyPushConstants {
     glm::vec4 sunColor{};        // 16 bytes — total 96
 };
 static_assert(sizeof(SkyPushConstants) <= 128);
+
+// GPU particle state — must exactly match the Particle struct in particle_sim.comp
+// and particle.vert (std430 layout: vec3+float pairs pack without padding).
+struct GpuParticle {
+    glm::vec3 pos;
+    float age; // age <= 0 = inactive slot
+    glm::vec3 vel;
+    float maxAge;
+    glm::vec4 colorStart;
+    glm::vec4 colorEnd;
+    float sizeStart;
+    float sizeEnd;
+    float additive;
+    float _pad;
+};
+static_assert(sizeof(GpuParticle) == 80);
+
+// Push constants for the particle compute pass.
+struct ParticleSimPush {
+    float dt;
+    uint32_t count;
+    float gravity;
+    float _pad;
+};
+static_assert(sizeof(ParticleSimPush) <= 128);
 
 class VkRenderer : public IRenderer {
   public:
@@ -146,6 +176,14 @@ class VkRenderer : public IRenderer {
     bool createSyncObjects();
 
     void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex);
+
+    // ── Particle system ────────────────────────────────────────────────────
+    bool createParticleResources();
+    void destroyParticleResources();
+    bool createParticleComputePipeline();
+    bool createParticleRenderPipelines();
+    void recordParticleCompute(VkCommandBuffer cmd, float dt);
+    void recordParticleDraw(VkCommandBuffer cmd);
 
     // ── Shader / resource discovery ────────────────────────────────────────
     static std::string resolveShaderDir();
@@ -253,9 +291,43 @@ class VkRenderer : public IRenderer {
     uint64_t m_totalFrames{0};
     bool m_framebufferResized{false};
     bool m_frameAcquired{false};
+    uint64_t m_lastFrameNs{0};     // nanosecond timestamp of previous beginFrame
+    float m_frameDt{1.0f / 60.0f}; // wall-clock seconds since last frame (capped)
 
     // Scene submitted this frame (set by setScene, consumed by recordCommandBuffer).
     FrameScene m_pendingScene{};
+
+    // ── Particle GPU resources ────────────────────────────────────────────
+    // Persistent device-local SSBO holding all particle slots (kMaxParticles).
+    VkBuffer m_particlePoolBuf{VK_NULL_HANDLE};
+    VkDeviceMemory m_particlePoolMemory{VK_NULL_HANDLE};
+
+    // Per-frame host-visible staging buffer for new particles (CPU→GPU ring-buffer spawn).
+    struct ParticleSpawnFrame {
+        VkBuffer buf{VK_NULL_HANDLE};
+        VkDeviceMemory mem{VK_NULL_HANDLE};
+        void* mapped{nullptr};
+    };
+    std::array<ParticleSpawnFrame, MAX_FRAMES_IN_FLIGHT> m_particleSpawn{};
+
+    // Compute pipeline (particle_sim.comp): integrates pos/vel/age each frame.
+    VkDescriptorSetLayout m_particleComputeSetLayout{VK_NULL_HANDLE};
+    VkPipelineLayout m_particleComputeLayout{VK_NULL_HANDLE};
+    VkPipeline m_particleComputePipeline{VK_NULL_HANDLE};
+    VkDescriptorPool m_particleComputePool{VK_NULL_HANDLE};
+    VkDescriptorSet m_particleComputeSet{VK_NULL_HANDLE};
+
+    // Render pipeline (particle.vert/frag): instanced camera-facing billboards.
+    // Combined set 0: [0]=camera UBO (per-frame), [1]=particle SSBO (read-only).
+    VkDescriptorSetLayout m_particleRenderSetLayout{VK_NULL_HANDLE};
+    VkPipelineLayout m_particleRenderLayout{VK_NULL_HANDLE};
+    VkPipeline m_particleAdditPipeline{VK_NULL_HANDLE}; // additive blend
+    VkPipeline m_particleAlphaPipeline{VK_NULL_HANDLE}; // alpha blend
+    VkDescriptorPool m_particleRenderPool{VK_NULL_HANDLE};
+    std::array<VkDescriptorSet, MAX_FRAMES_IN_FLIGHT> m_particleRenderSets{};
+
+    // Ring-buffer spawn pointer (CPU-maintained; wraps around kMaxParticles).
+    uint32_t m_nextParticleSlot{0};
 
     // ── GPU resource manager ──────────────────────────────────────────────
     VkResourceManager m_resources;

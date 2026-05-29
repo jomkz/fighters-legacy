@@ -36,6 +36,9 @@ set(GLSL_SHADERS
     sky.frag
     tonemap.vert
     tonemap.frag
+    particle_sim.comp
+    particle.vert
+    particle.frag
 )
 
 set(SPIRV_FILES "")
