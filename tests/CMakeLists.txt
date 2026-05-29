@@ -38,8 +38,13 @@ target_include_directories(test_sandbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_sandbox)
 
 add_executable(test_content_system test_content_system.cpp)
-target_link_libraries(test_content_system PRIVATE Catch2::Catch2WithMain engine-content)
+target_link_libraries(test_content_system PRIVATE Catch2::Catch2WithMain engine-content engine-difficulty)
 catch_discover_tests(test_content_system)
+
+add_executable(test_difficulty test_difficulty.cpp)
+target_link_libraries(test_difficulty PRIVATE Catch2::Catch2WithMain engine-difficulty)
+target_include_directories(test_difficulty PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_difficulty)
 
 add_executable(test_input test_input.cpp)
 target_link_libraries(test_input PRIVATE Catch2::Catch2WithMain engine-input)

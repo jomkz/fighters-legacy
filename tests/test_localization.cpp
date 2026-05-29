@@ -193,6 +193,9 @@ struct LocaleMockPack : public IContentPack {
     std::vector<std::string> listAssets(AssetType) const override {
         return {};
     }
+    std::optional<std::string> loadConfig(const char*) const override {
+        return std::nullopt;
+    }
 };
 
 // Populate an fs with the minimal locale/en directory structure

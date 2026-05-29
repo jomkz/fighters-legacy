@@ -36,6 +36,10 @@ class AssetManager {
     std::shared_ptr<TerrainData> loadTerrain(const char* name);
     std::shared_ptr<AIScript> loadAIScript(const char* name);
 
+    // Walks the priority stack. Returns the raw text of the first pack
+    // that returns non-nullopt for loadConfig(name). Not cached.
+    std::optional<std::string> loadConfig(const char* name);
+
     // Hot-reload support (sandbox/editor mode only). Pass the watcher from Platform.
     // Registers each pack's rootDirectory() with the watcher (recursive).
     // processHotReload() must be called once per frame from the game loop.

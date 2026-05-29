@@ -45,6 +45,10 @@ class IContentPack {
 
     virtual std::vector<std::string> listAssets(AssetType type) const = 0;
 
+    // Returns the raw text of "<modDir>/data/<name>", or nullopt if not present.
+    // Used for data-driven config files (e.g. difficulty.toml) that mods can override.
+    virtual std::optional<std::string> loadConfig(const char* name) const = 0;
+
     // Exported symbol name for compiled content pack shared libraries.
     // A plugin must export a function with this name and signature:
     //   extern "C" IContentPack* fighters_legacy_create_pack();

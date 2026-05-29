@@ -9,6 +9,7 @@
 #include "content/FolderContentPack.h"
 #include "content/IContentPack.h"
 #include "content/ModLoader.h"
+#include "difficulty/DifficultyMultipliers.h"
 
 #include <cstring>
 #include <map>
@@ -207,6 +208,15 @@ struct MockContentPack : public IContentPack {
     std::vector<std::string> listAssets(AssetType) const override {
         return {};
     }
+
+    std::map<std::string, std::string> configs;
+
+    std::optional<std::string> loadConfig(const char* name) const override {
+        auto it = configs.find(name);
+        if (it == configs.end())
+            return std::nullopt;
+        return it->second;
+    }
 };
 
 // Helper: build a valid manifest TOML string
@@ -369,6 +379,9 @@ static std::vector<std::unique_ptr<IContentPack>> makePacks(MockContentPack* pac
         }
         std::vector<std::string> listAssets(AssetType t) const override {
             return p->listAssets(t);
+        }
+        std::optional<std::string> loadConfig(const char* n) const override {
+            return p->loadConfig(n);
         }
     };
     std::vector<std::unique_ptr<IContentPack>> v;
@@ -1349,4 +1362,139 @@ TEST_CASE("AssetManager::initialize keeps pack when NeedsConfiguration and confi
     pack.assets[{"sky", AssetType::Texture}] = {0x11};
     REQUIRE(am.loadTexture("sky") != nullptr);
     REQUIRE_FALSE(logger.hasMessage(LogLevel::Warn, "dropping pack"));
+}
+
+// ---------------------------------------------------------------------------
+// FolderContentPack::loadConfig
+// ---------------------------------------------------------------------------
+
+static FolderContentPack::Manifest makeTestManifest() {
+    return {"Test Mod", "test-mod", "1.0.0", "1.0", 10};
+}
+
+TEST_CASE("FolderContentPack::loadConfig returns file content when present", "[content]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("mods/test-mod/data/difficulty.toml", "[cadet]\nreaction_time_s = 1.5\n");
+
+    FolderContentPack pack(fs, logger, "mods/test-mod", makeTestManifest());
+    auto result = pack.loadConfig("difficulty.toml");
+
+    REQUIRE(result.has_value());
+    CHECK(result->find("reaction_time_s") != std::string::npos);
+}
+
+TEST_CASE("FolderContentPack::loadConfig returns nullopt when file absent", "[content]") {
+    MockFilesystem fs;
+    MockLogger logger;
+
+    FolderContentPack pack(fs, logger, "mods/test-mod", makeTestManifest());
+    auto result = pack.loadConfig("difficulty.toml");
+
+    CHECK_FALSE(result.has_value());
+}
+
+// ---------------------------------------------------------------------------
+// AssetManager::loadConfig
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AssetManager::loadConfig returns content from pack that has the file", "[content]") {
+    MockContentPack pack;
+    MockLogger logger;
+    pack.configs["difficulty.toml"] = "[cadet]\nreaction_time_s = 1.5\n";
+
+    AssetManager am(makePacks(&pack), logger);
+    am.initialize(nullptr);
+
+    auto result = am.loadConfig("difficulty.toml");
+    REQUIRE(result.has_value());
+    CHECK(result->find("reaction_time_s") != std::string::npos);
+}
+
+TEST_CASE("AssetManager::loadConfig returns nullopt when no pack has the file", "[content]") {
+    MockContentPack pack;
+    MockLogger logger;
+
+    AssetManager am(makePacks(&pack), logger);
+    am.initialize(nullptr);
+
+    CHECK_FALSE(am.loadConfig("difficulty.toml").has_value());
+}
+
+TEST_CASE("AssetManager::loadConfig returns higher-priority pack's config", "[content]") {
+    MockContentPack highPack, lowPack;
+    MockLogger logger;
+    highPack.packPriority = 20;
+    highPack.configs["difficulty.toml"] = "high-priority-content";
+    lowPack.packPriority = 10;
+    lowPack.configs["difficulty.toml"] = "low-priority-content";
+
+    // AssetManager receives packs already priority-sorted (index 0 = highest)
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::make_unique<MockContentPack>(highPack));
+    packs.push_back(std::make_unique<MockContentPack>(lowPack));
+
+    AssetManager am(std::move(packs), logger);
+    am.initialize(nullptr);
+
+    auto result = am.loadConfig("difficulty.toml");
+    REQUIRE(result.has_value());
+    CHECK(*result == "high-priority-content");
+}
+
+// ---------------------------------------------------------------------------
+// DifficultyMultipliers::load(AssetManager&, IFilesystem&, ILogger&)
+// ---------------------------------------------------------------------------
+
+static constexpr const char* kMinimalDifficultyToml =
+    "[cadet]\nreaction_time_s = 1.5\naim_error_deg = 8.0\n"
+    "radar_sensor_range = 0.5\nflight_assists = \"all_on\"\naim_assist = true\n"
+    "enemy_labels = \"always\"\nradar_realism = \"simple\"\nblackout_redout = false\n"
+    "fuel_consumption = false\nin_flight_refueling = \"auto\"\nfriendly_fire = false\n"
+    "crash_damage = false\nrearm_mode = \"instantaneous\"\n"
+    "countermeasure_use = \"never\"\nenergy_management = \"passive\"\n"
+    "sam_engagement_range = 0.6\nsam_radar_shutdown = \"never\"\n"
+    "[pilot]\nreaction_time_s = 0.8\naim_error_deg = 4.0\n"
+    "radar_sensor_range = 0.8\nflight_assists = \"g_limiter_only\"\naim_assist = true\n"
+    "enemy_labels = \"on_lock\"\nradar_realism = \"standard\"\nblackout_redout = true\n"
+    "fuel_consumption = true\nin_flight_refueling = \"simplified\"\nfriendly_fire = false\n"
+    "crash_damage = true\nrearm_mode = \"timed\"\n"
+    "countermeasure_use = \"reactive\"\nenergy_management = \"standard\"\n"
+    "sam_engagement_range = 0.8\nsam_radar_shutdown = \"sometimes\"\n"
+    "[ace]\nreaction_time_s = 0.3\naim_error_deg = 1.0\n"
+    "radar_sensor_range = 1.0\nflight_assists = \"all_off\"\naim_assist = false\n"
+    "enemy_labels = \"off\"\nradar_realism = \"full\"\nblackout_redout = true\n"
+    "fuel_consumption = true\nin_flight_refueling = \"manual\"\nfriendly_fire = true\n"
+    "crash_damage = true\nrearm_mode = \"supply_limited\"\n"
+    "countermeasure_use = \"proactive\"\nenergy_management = \"aggressive_bfm\"\n"
+    "sam_engagement_range = 1.0\nsam_radar_shutdown = \"always\"\n";
+
+TEST_CASE("DifficultyMultipliers::load(AssetManager) uses pack config when available", "[content]") {
+    MockContentPack pack;
+    MockLogger logger;
+    MockFilesystem fs;
+    pack.configs["difficulty.toml"] = kMinimalDifficultyToml;
+
+    AssetManager am(makePacks(&pack), logger);
+    am.initialize(nullptr);
+
+    auto dm = DifficultyMultipliers::load(am, fs, logger);
+    CHECK(logger.entries.empty());
+    CHECK(dm.preset(DifficultyPreset::Ace).reactionTimeS == 0.3f);
+    CHECK(dm.preset(DifficultyPreset::Pilot).reactionTimeS == 0.8f);
+}
+
+TEST_CASE("DifficultyMultipliers::load(AssetManager) falls back to IFilesystem when no pack", "[content]") {
+    MockContentPack pack;
+    MockLogger logger;
+    MockFilesystem fs;
+    // pack has no config; fs has the file
+    fs.addFile("data/difficulty.toml", kMinimalDifficultyToml);
+
+    AssetManager am(makePacks(&pack), logger);
+    am.initialize(nullptr);
+
+    auto dm = DifficultyMultipliers::load(am, fs, logger);
+    CHECK(logger.entries.empty());
+    CHECK(dm.preset(DifficultyPreset::Cadet).reactionTimeS == 1.5f);
 }

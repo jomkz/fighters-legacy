@@ -94,6 +94,14 @@ std::shared_ptr<AIScript> AssetManager::loadAIScript(const char* name) {
     return loadAsset<AIScript>(AssetType::AIScript, name, &IContentPack::loadAIScript);
 }
 
+std::optional<std::string> AssetManager::loadConfig(const char* name) {
+    for (auto& pack : m_packs) {
+        if (auto result = pack->loadConfig(name))
+            return result;
+    }
+    return std::nullopt;
+}
+
 void AssetManager::enableHotReload(IFilesystemWatcher& watcher) {
     m_watcher = &watcher;
     for (auto& pack : m_packs) {

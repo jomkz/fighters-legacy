@@ -3,6 +3,7 @@ if(TARGET platform-sdl3 AND TARGET platform-vulkan)
     target_link_libraries(fighters-legacy PRIVATE
         engine-crash
         engine-config
+        engine-difficulty
         engine-firstrun
         engine-content
         engine-sandbox
