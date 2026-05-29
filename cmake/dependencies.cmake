@@ -122,20 +122,24 @@ else()
     set(YAML_CPP_BUILD_TOOLS       OFF CACHE BOOL "" FORCE)
     set(YAML_CPP_BUILD_CONTRIB     OFF CACHE BOOL "" FORCE)
     set(YAML_CPP_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    # yaml-cpp 0.8.0 declares cmake_minimum_required(VERSION 2.8.12); CMake 4.x
+    # rejects minimum versions below 3.5. CMAKE_POLICY_VERSION_MINIMUM is the
+    # CMake 4.x mechanism for this (advertised in the cmake_minimum_required error
+    # message itself). Set it as a cache variable so it is visible when CMake
+    # configures the FetchContent subdirectory.
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
+        set(CMAKE_POLICY_VERSION_MINIMUM "3.5" CACHE INTERNAL "")
+    endif()
     FetchContent_Declare(yaml-cpp
         GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
         GIT_TAG        0.8.0
         GIT_SHALLOW    TRUE
         SYSTEM
-        # yaml-cpp 0.8.0 uses cmake_minimum_required(VERSION 2.8.12) which CMake 4.x
-        # no longer accepts. Patch the minimum version before configuration.
-        # <SOURCE_DIR> is expanded by FetchContent/ExternalProject to the absolute
-        # path of the fetched source directory at run time.
-        PATCH_COMMAND  ${CMAKE_COMMAND}
-                       "-DFILE=<SOURCE_DIR>/CMakeLists.txt"
-                       -P "${CMAKE_SOURCE_DIR}/cmake/patch_yaml_cpp.cmake"
     )
     FetchContent_MakeAvailable(yaml-cpp)
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
+        unset(CMAKE_POLICY_VERSION_MINIMUM CACHE)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
