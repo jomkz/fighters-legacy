@@ -28,6 +28,8 @@
 #include "vulkan/VkRendererFactory.h"
 
 #include <SDL3/SDL.h>
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -294,7 +296,7 @@ int main(int argc, char** argv) {
         sceneRenderer.setBuiltinFloor(true);
 
         // Orbit the camera south of the formation (yaw=0 = south of pivot), looking north.
-        cameraController.setFreeOrbit({0.0f, 500.0f, 0.0f}, 0.0f, 20.0f, 200.0f);
+        cameraController.setFreeOrbit({0.0f, 500.0f, 0.0f}, 0.0f, -10.0f, 200.0f);
 
         // Spawn 5 entities in a V-formation at 500 m altitude. Slots 0-2 are opaque
         // (red/green/blue), slots 3-4 are glass (yellow/purple) — exercises the transparent pass.
@@ -322,7 +324,7 @@ int main(int argc, char** argv) {
     // Step 18: Shell loop — main thread owns all HAL.
     // Angled sun (better PBR shading than the default straight-down direction).
     EnvironmentState env{};
-    env.sunDirection = glm::normalize(glm::vec3{0.6f, -1.0f, 0.4f});
+    env.sunDirection = glm::normalize(glm::vec3{0.6f, 1.0f, 0.4f}); // sun above horizon
 
     // Sandbox demo: static fire emitter at world origin exercises the GPU particle pass
     // from frame 1 without requiring any entity damage state.  effectName points to a
@@ -343,12 +345,85 @@ int main(int argc, char** argv) {
     const std::span<const ParticleEmitterState> sandboxEmitters =
         inspector ? std::span<const ParticleEmitterState>{&kDemoFire, 1} : std::span<const ParticleEmitterState>{};
 
+    // Sandbox free-look camera state — pivot is the formation centre at 500 m altitude.
+    // Matches the initial setFreeOrbit call above (yaw=0, pitch=-10, dist=200).
+    glm::vec3 sbPivot{0.0f, 500.0f, 0.0f}; // mutable — WASD/QE pan it
+    float sbYaw = 0.0f;
+    float sbPitch = -10.0f;
+    float sbRadius = 200.0f;
+    float sbLastMouseX = 0.0f;
+    float sbLastMouseY = 0.0f;
+    bool sbFirstFrame = true;
+
     bool running = true;
     while (running && !p.window->shouldClose()) {
+        // Sandbox: pull wheel events out of the SDL queue before pollEvents drains it.
+        if (inspector) {
+            SDL_PumpEvents();
+            SDL_Event ev;
+            while (SDL_PeepEvents(&ev, 1, SDL_GETEVENT, SDL_EVENT_MOUSE_WHEEL, SDL_EVENT_MOUSE_WHEEL) > 0)
+                sbRadius = std::clamp(sbRadius - ev.wheel.y * 10.0f, 20.0f, 5000.0f);
+        }
+
         p.window->pollEvents();
         p.renderer->beginFrame();
+
+        // Sandbox free-look: mouse orbit + keyboard zoom/reset.
+        if (inspector) {
+            float mx = 0, my = 0;
+            SDL_MouseButtonFlags mb = SDL_GetMouseState(&mx, &my);
+            if (!sbFirstFrame && (mb & SDL_BUTTON_LMASK)) {
+                sbYaw -= (mx - sbLastMouseX) * 0.35f;
+                sbPitch += (my - sbLastMouseY) * 0.25f;
+                sbPitch = std::clamp(sbPitch, -89.0f, 89.0f);
+            }
+            sbLastMouseX = mx;
+            sbLastMouseY = my;
+            sbFirstFrame = false;
+
+            const bool* keys = SDL_GetKeyboardState(nullptr);
+
+            // Zoom.
+            if (keys[SDL_SCANCODE_EQUALS] || keys[SDL_SCANCODE_KP_PLUS])
+                sbRadius = std::max(20.0f, sbRadius - 5.0f);
+            if (keys[SDL_SCANCODE_MINUS] || keys[SDL_SCANCODE_KP_MINUS])
+                sbRadius = std::min(5000.0f, sbRadius + 5.0f);
+
+            // WASD — pan pivot in camera-relative horizontal plane.
+            // Q/E — altitude (world Y).
+            {
+                const float speed = std::max(1.0f, sbRadius * 0.01f);
+                const float yawRad = glm::radians(sbYaw);
+                const glm::vec3 fwd{-std::sin(yawRad), 0.0f, -std::cos(yawRad)};
+                const glm::vec3 rgt{std::cos(yawRad), 0.0f, -std::sin(yawRad)};
+                if (keys[SDL_SCANCODE_W])
+                    sbPivot += fwd * speed;
+                if (keys[SDL_SCANCODE_S])
+                    sbPivot -= fwd * speed;
+                if (keys[SDL_SCANCODE_D])
+                    sbPivot += rgt * speed;
+                if (keys[SDL_SCANCODE_A])
+                    sbPivot -= rgt * speed;
+                if (keys[SDL_SCANCODE_E])
+                    sbPivot.y += speed;
+                if (keys[SDL_SCANCODE_Q])
+                    sbPivot.y -= speed;
+            }
+
+            // Reset to initial formation view.
+            if (keys[SDL_SCANCODE_R]) {
+                sbPivot = {0.0f, 500.0f, 0.0f};
+                sbYaw = 0.0f;
+                sbPitch = -10.0f;
+                sbRadius = 200.0f;
+            }
+
+            cameraController.setFreeOrbit(sbPivot, sbYaw, sbPitch, sbRadius);
+        }
+
         if (inspector && !inspector->update())
             running = false;
+
         float alpha = gameLoop.shellTick();
         float aspect =
             static_cast<float>(p.window->width()) / static_cast<float>(p.window->height() > 0 ? p.window->height() : 1);

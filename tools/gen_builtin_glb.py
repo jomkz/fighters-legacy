@@ -91,16 +91,18 @@ def build_tetrahedron() -> bytes:
         length = math.sqrt(nx*nx + ny*ny + nz*nz)
         return (nx/length, ny/length, nz/length)
 
-    # 4 faces: front (v0,v1,v2), (v0,v2,v3), (v0,v3,v1), base (v1,v3,v2)
-    # Ensure CCW winding when viewed from outside.
+    # 4 faces with CCW winding when viewed from outside (glTF convention).
+    # Swapping the last two vertices of the naive ordering corrects the cross-product
+    # direction to point outward from the centroid at the origin.
     faces = [
-        (v0, v1, v2),
-        (v0, v2, v3),
-        (v0, v3, v1),
-        (v1, v3, v2),  # base — reversed winding to face outward (-X direction)
+        (v0, v2, v1),
+        (v0, v3, v2),
+        (v0, v1, v3),
+        (v1, v2, v3),  # base, outward normal = -X direction
     ]
 
-    bin_data = b''
+    pos_bin = b''
+    norm_bin = b''
     pos_min = [float('inf')] * 3
     pos_max = [float('-inf')] * 3
 
@@ -108,12 +110,15 @@ def build_tetrahedron() -> bytes:
         a, b, c = face
         n = norm(a, b, c)
         for v in (a, b, c):
-            bin_data += pack_vec3(*v)
-            bin_data += pack_vec3(*n)
+            pos_bin += pack_vec3(*v)
+            norm_bin += pack_vec3(*n)
             for i in range(3):
                 pos_min[i] = min(pos_min[i], v[i])
                 pos_max[i] = max(pos_max[i], v[i])
 
+    # Non-interleaved: [positions 144B][normals 144B] = 288 bytes.
+    # No byteStride — sequential layout avoids the stride×count byteLength issue.
+    bin_data = pos_bin + norm_bin
     assert len(bin_data) == 12 * 24  # 12 verts × (vec3 pos + vec3 norm)
 
     byte_len = len(bin_data)
@@ -149,8 +154,8 @@ def build_tetrahedron() -> bytes:
             },
         ],
         "bufferViews": [
-            {"buffer": 0, "byteOffset": 0,  "byteLength": 12*12, "byteStride": 24, "target": 34962},  # positions, stride 24
-            {"buffer": 0, "byteOffset": 12, "byteLength": 12*12, "byteStride": 24, "target": 34962},  # normals,   stride 24 (offset 12 within each stride)
+            {"buffer": 0, "byteOffset": 0,   "byteLength": 144, "target": 34962},  # positions
+            {"buffer": 0, "byteOffset": 144, "byteLength": 144, "target": 34962},  # normals
         ],
         "buffers": [{"byteLength": byte_len}],
     }
@@ -247,6 +252,52 @@ def build_floor_plane() -> bytes:
     return make_glb_full(bin_data, gltf)
 
 
+def build_tetrahedron_face(vertices) -> bytes:
+    """Build a single triangle as a minimal .glb (one face of the tetrahedron)."""
+    a, b, c = vertices
+
+    def cross3(u, v):
+        return (u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0])
+
+    def norm3(n):
+        length = math.sqrt(sum(x*x for x in n))
+        return tuple(x/length for x in n)
+
+    ab = (b[0]-a[0], b[1]-a[1], b[2]-a[2])
+    ac = (c[0]-a[0], c[1]-a[1], c[2]-a[2])
+    n = norm3(cross3(ab, ac))
+
+    pos_bin = pack_vec3(*a) + pack_vec3(*b) + pack_vec3(*c)
+    norm_bin = pack_vec3(*n) * 3
+
+    pos_min = [min(v[i] for v in (a, b, c)) for i in range(3)]
+    pos_max = [max(v[i] for v in (a, b, c)) for i in range(3)]
+
+    bin_data = pos_bin + norm_bin
+    assert len(bin_data) == 3 * 24
+
+    gltf = {
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "mode": 4}]}],
+        "accessors": [
+            {"bufferView": 0, "byteOffset": 0, "componentType": 5126, "count": 3,
+             "type": "VEC3",
+             "min": [round(pos_min[i], 6) for i in range(3)],
+             "max": [round(pos_max[i], 6) for i in range(3)]},
+            {"bufferView": 1, "byteOffset": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
+        ],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0,  "byteLength": 36, "target": 34962},
+            {"buffer": 0, "byteOffset": 36, "byteLength": 36, "target": 34962},
+        ],
+        "buffers": [{"byteLength": len(bin_data)}],
+    }
+    return make_glb_full(bin_data, gltf)
+
+
 def bytes_to_cpp_array(name: str, data: bytes) -> str:
     lines = []
     lines.append(f'static const uint8_t {name}[] = {{')
@@ -263,11 +314,26 @@ def main():
     tet = build_tetrahedron()
     floor = build_floor_plane()
 
+    # Compute the 4 CCW-wound faces (same geometry as build_tetrahedron).
+    R = 5.0
+    base_r = R * math.sqrt(8.0 / 9.0)
+    base_x = -R / 3.0
+    v0 = (R, 0.0, 0.0)
+    v1 = (base_x, base_r * math.cos(0),              base_r * math.sin(0))
+    v2 = (base_x, base_r * math.cos(2*math.pi/3),    base_r * math.sin(2*math.pi/3))
+    v3 = (base_x, base_r * math.cos(4*math.pi/3),    base_r * math.sin(4*math.pi/3))
+    faces = [(v0, v2, v1), (v0, v3, v2), (v0, v1, v3), (v1, v2, v3)]
+
     print(f'// kTetrahedronGlb: {len(tet)} bytes')
     print(bytes_to_cpp_array('kTetrahedronGlb', tet))
     print()
     print(f'// kFloorPlaneGlb: {len(floor)} bytes')
     print(bytes_to_cpp_array('kFloorPlaneGlb', floor))
+    print()
+    for i, face in enumerate(faces):
+        glb = build_tetrahedron_face(face)
+        print(f'// kTetrahedronFace{i}Glb: {len(glb)} bytes')
+        print(bytes_to_cpp_array(f'kTetrahedronFace{i}Glb', glb))
 
 
 if __name__ == '__main__':

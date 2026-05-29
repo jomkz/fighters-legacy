@@ -19,4 +19,8 @@ namespace fl {
 std::span<const uint8_t> builtinTetrahedronGlb() noexcept;
 std::span<const uint8_t> builtinFloorPlaneGlb() noexcept;
 
+// Individual faces of the tetrahedron — one triangle each, for per-face coloring.
+// face 0: red   face 1: green   face 2: blue   face 3: yellow
+std::span<const uint8_t> builtinTetrahedronFaceGlb(int face) noexcept; // face in [0,3]
+
 } // namespace fl

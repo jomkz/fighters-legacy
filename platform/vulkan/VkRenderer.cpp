@@ -334,15 +334,17 @@ bool VkRenderer::init(IWindow* window) {
         return false;
     if (!createBloomPipelines())
         return false;
+    if (!allocateCommandBuffers())
+        return false;
+    if (!createPerFrameDescriptors())
+        return false;
+    // createParticleResources writes the camera UBO handle into the particle render
+    // descriptor sets — must come after createPerFrameDescriptors allocates those buffers.
     if (!createParticleResources())
         return false;
     if (!createParticleComputePipeline())
         return false;
     if (!createParticleRenderPipelines())
-        return false;
-    if (!allocateCommandBuffers())
-        return false;
-    if (!createPerFrameDescriptors())
         return false;
     if (!createSyncObjects())
         return false;
@@ -2135,11 +2137,12 @@ bool VkRenderer::createParticleResources() {
         }
     }
 
-    // ── Render descriptor set layout (set 0: camera UBO + particle SSBO RO)
+    // ── Render descriptor set layout (set 0: particle SSBO RO + camera UBO)
+    // particle.vert: binding 0 = particle pool SSBO, binding 1 = camera UBO.
     {
         const std::array<VkDescriptorSetLayoutBinding, 2> bindings{{
-            {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
-            {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
+            {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
         }};
         VkDescriptorSetLayoutCreateInfo lci{};
         lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -2212,13 +2215,13 @@ bool VkRenderer::createParticleResources() {
                 return false;
             }
 
-            VkDescriptorBufferInfo camInfo{m_perFrame[i].cameraBuffer, 0, sizeof(CameraUBO)};
             VkDescriptorBufferInfo poolBuf{m_particlePoolBuf, 0, kMaxParticles * sizeof(GpuParticle)};
+            VkDescriptorBufferInfo camInfo{m_perFrame[i].cameraBuffer, 0, sizeof(CameraUBO)};
             const std::array<VkWriteDescriptorSet, 2> writes{{
                 {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_particleRenderSets[i], 0, 0, 1,
-                 VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &camInfo, nullptr},
-                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_particleRenderSets[i], 1, 0, 1,
                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &poolBuf, nullptr},
+                {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_particleRenderSets[i], 1, 0, 1,
+                 VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &camInfo, nullptr},
             }};
             vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         }
