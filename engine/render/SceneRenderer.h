@@ -58,9 +58,16 @@ class SceneRenderer {
     // culled before building RenderItems.  Default is 50 km.
     void setDrawDistance(float distanceKm) noexcept;
 
+    // When enabled, a 4 km flat floor plane is appended to every submitted FrameScene
+    // as the last opaque RenderItem.  Uses the builtin olive-gray floor material.
+    void setBuiltinFloor(bool show) noexcept;
+
   private:
     MeshHandle getOrUploadMesh(const std::string& name);
     MaterialHandle getOrUploadMaterial(const std::string& meshName);
+
+    // Upload builtin meshes and materials on first call; no-op thereafter.
+    void ensureBuiltins();
 
     SimRenderBridge& m_bridge;
     MeshNameResolver m_resolver;
@@ -81,6 +88,17 @@ class SceneRenderer {
 
     // Nominal tick period used for velocity-based position extrapolation.
     static constexpr float kTickDt = 1.0f / 60.0f;
+
+    // Builtin fallback resources — uploaded once on first renderFrame call.
+    // Entity mesh: tetrahedron; palette cycles 6 colors by entityIdx (3 opaque, 3 glass).
+    // Floor mesh: 4 km flat plane, olive-gray material.
+    static constexpr int kPaletteSize = 6;
+
+    MeshHandle m_builtinEntityMesh{};
+    MaterialHandle m_builtinPalette[kPaletteSize]{};
+    MeshHandle m_builtinFloorMesh{};
+    MaterialHandle m_builtinFloorMat{};
+    bool m_showBuiltinFloor{false};
 };
 
 } // namespace fl

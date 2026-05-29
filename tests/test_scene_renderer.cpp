@@ -249,11 +249,13 @@ TEST_CASE("SceneRenderer submits one RenderItem when entity has loadable mesh") 
     REQUIRE(renderer.setSceneCount == 1);
     REQUIRE(renderer.lastScene.renderItems.size() == 1);
     CHECK(renderer.lastScene.renderItems[0].mesh.valid());
-    CHECK(renderer.createMeshCount == 1);
-    CHECK(renderer.createMaterialCount == 1);
+    // ensureBuiltins() uploads 2 meshes (entity + floor) + 7 materials (6 palette + 1 floor);
+    // the content mesh adds 1 more createMesh and 1 more createMaterial.
+    CHECK(renderer.createMeshCount == 3);
+    CHECK(renderer.createMaterialCount == 8);
 }
 
-TEST_CASE("SceneRenderer skips entity with unknown typeIndex") {
+TEST_CASE("SceneRenderer falls back to builtin for entity with unknown typeIndex") {
     MockLogger logger;
     auto pack = std::make_unique<MockContentPack>();
     std::vector<std::unique_ptr<IContentPack>> packs;
@@ -271,14 +273,15 @@ TEST_CASE("SceneRenderer skips entity with unknown typeIndex") {
 
     sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
 
-    CHECK(renderer.setSceneCount == 1);
-    CHECK(renderer.lastScene.renderItems.empty());
+    REQUIRE(renderer.setSceneCount == 1);
+    REQUIRE(renderer.lastScene.renderItems.size() == 1);
+    CHECK(renderer.lastScene.renderItems[0].mesh.valid()); // builtin tetrahedron
 }
 
-TEST_CASE("SceneRenderer skips entity when mesh bytes are empty") {
+TEST_CASE("SceneRenderer falls back to builtin when mesh bytes are empty") {
     MockLogger logger;
     auto pack = std::make_unique<MockContentPack>();
-    pack->meshes["empty_mesh"] = {}; // empty bytes
+    pack->meshes["empty_mesh"] = {}; // empty bytes — upload will fail
 
     std::vector<std::unique_ptr<IContentPack>> packs;
     packs.push_back(std::move(pack));
@@ -295,9 +298,11 @@ TEST_CASE("SceneRenderer skips entity when mesh bytes are empty") {
 
     sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
 
-    CHECK(renderer.setSceneCount == 1);
-    CHECK(renderer.lastScene.renderItems.empty());
-    CHECK(renderer.createMeshCount == 0);
+    REQUIRE(renderer.setSceneCount == 1);
+    REQUIRE(renderer.lastScene.renderItems.size() == 1);
+    CHECK(renderer.lastScene.renderItems[0].mesh.valid()); // builtin tetrahedron
+    // createMesh was NOT called for the broken empty_mesh; only ensureBuiltins uploads.
+    CHECK(renderer.createMeshCount == 2); // builtin entity + builtin floor
 }
 
 // ---------------------------------------------------------------------------
@@ -331,9 +336,9 @@ TEST_CASE("SceneRenderer uses classicDamageMesh when damageLevel is nonzero") {
 
     REQUIRE(renderer.setSceneCount == 1);
     REQUIRE(renderer.lastScene.renderItems.size() == 1);
-    // Two distinct meshes should have been uploaded (f15c and f15c_damaged are different handles).
-    // Only f15c_damaged was needed → exactly one createMesh call.
-    CHECK(renderer.createMeshCount == 1);
+    // Only f15c_damaged was needed for content (f15c was not loaded).
+    // ensureBuiltins adds 2 builtin meshes → 3 total.
+    CHECK(renderer.createMeshCount == 3);
     CHECK((renderer.lastScene.renderItems[0].flags & kRenderFlagDamaged) != 0);
 }
 
@@ -362,7 +367,7 @@ TEST_CASE("SceneRenderer uses primary mesh when damageLevel is zero") {
 
     REQUIRE(renderer.lastScene.renderItems.size() == 1);
     CHECK((renderer.lastScene.renderItems[0].flags & kRenderFlagDamaged) == 0);
-    CHECK(renderer.createMeshCount == 1); // only "f15c" uploaded
+    CHECK(renderer.createMeshCount == 3); // ensureBuiltins (2) + "f15c" (1)
 }
 
 // ---------------------------------------------------------------------------
@@ -398,8 +403,9 @@ TEST_CASE("SceneRenderer caches mesh handle: createMesh called once for repeated
         sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
     }
 
-    CHECK(renderer.createMeshCount == 1);
-    CHECK(renderer.createMaterialCount == 1);
+    // ensureBuiltins on frame 1: 2 meshes + 7 materials. Content "f15c": +1 each. Frame 2: cached.
+    CHECK(renderer.createMeshCount == 3);
+    CHECK(renderer.createMaterialCount == 8);
     CHECK(renderer.setSceneCount == 2);
 }
 
@@ -539,4 +545,63 @@ TEST_CASE("MockRenderer applySettings accepts any RendererSettings") {
     rs.drawDistanceKm = 20.0f;
     renderer.applySettings(rs);     // must not crash
     CHECK(renderer.initCount == 0); // no side effects on other counters
+}
+
+// ---------------------------------------------------------------------------
+// SceneRenderer -- builtin palette fallback
+// ---------------------------------------------------------------------------
+
+TEST_CASE("SceneRenderer falls back to builtin palette when resolver returns false") {
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, noTypes(), assets, renderer};
+
+    EntityRenderEntry entry = makeEntry(0);
+    entry.entityIdx = 0;
+    RenderSnapshot snap = makeSnap();
+    snap.entries.push_back(entry);
+    bridge.publish(std::move(snap));
+
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+
+    REQUIRE(renderer.setSceneCount == 1);
+    REQUIRE(renderer.lastScene.renderItems.size() == 1);
+    CHECK(renderer.lastScene.renderItems[0].mesh.valid()); // builtin tetrahedron
+    CHECK(renderer.lastScene.renderItems[0].material.valid());
+}
+
+TEST_CASE("SceneRenderer assigns distinct palette materials by entityIdx") {
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, noTypes(), assets, renderer};
+
+    EntityRenderEntry e0 = makeEntry(0, {0.0f, 0.0f, 0.0f});
+    e0.entityIdx = 0;
+    EntityRenderEntry e1 = makeEntry(0, {1.0f, 0.0f, 0.0f});
+    e1.entityIdx = 1;
+
+    RenderSnapshot snap = makeSnap();
+    snap.entries.push_back(e0);
+    snap.entries.push_back(e1);
+    bridge.publish(std::move(snap));
+
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+
+    REQUIRE(renderer.setSceneCount == 1);
+    REQUIRE(renderer.lastScene.renderItems.size() == 2);
+    const auto& items = renderer.lastScene.renderItems;
+    CHECK(items[0].material.valid());
+    CHECK(items[1].material.valid());
+    // entityIdx 0 and 1 map to different palette slots.
+    CHECK(items[0].material.id != items[1].material.id);
 }

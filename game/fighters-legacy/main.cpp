@@ -277,7 +277,40 @@ int main(int argc, char** argv) {
                                         return pen ? pen->visualEffect : std::string{};
                                     });
 
-    // Step 17c: Sandbox inspector (when no content packs are present).
+    // Step 17c: Sandbox mode — register builtin entity type, configure scene, spawn formation.
+    // All entity registration and spawning happen before gameLoop.start() so no sim thread
+    // exists yet; calling spawn() on the main thread is data-race-free in this window.
+    if (outcome == FirstRunOutcome::LaunchSandboxInspector) {
+        // Builtin debug type: mesh is intentionally empty so SceneRenderer falls back to the
+        // tetrahedron palette, cycling 6 colors by entityIdx (3 opaque, 3 glass/transparent).
+        fl::EntityDef debugDef;
+        debugDef.id = "builtin:debug-entity";
+        debugDef.name = "Debug Entity";
+        debugDef.category = fl::ObjectCategory::AirVehicle;
+        debugDef.maxHp = 100.0f;
+        entityRegistry.registerType(std::move(debugDef));
+
+        // Enable the builtin floor plane (4 km × 4 km flat quad at Y=0).
+        sceneRenderer.setBuiltinFloor(true);
+
+        // Orbit the camera south of the formation (yaw=0 = south of pivot), looking north.
+        cameraController.setFreeOrbit({0.0f, 500.0f, 0.0f}, 0.0f, 20.0f, 200.0f);
+
+        // Spawn 5 entities in a V-formation at 500 m altitude. Slots 0-2 are opaque
+        // (red/green/blue), slots 3-4 are glass (yellow/purple) — exercises the transparent pass.
+        const float kAlt = 500.0f;
+        struct {
+            float x, z;
+        } kSlots[] = {{0, 0}, {-30, -25}, {30, -25}, {-60, -50}, {60, -50}};
+        for (const auto& s : kSlots) {
+            fl::EntityTransform t{};
+            t.pos[0] = s.x;
+            t.pos[1] = kAlt;
+            t.pos[2] = s.z;
+            entityManager.spawn("builtin:debug-entity", t);
+        }
+    }
+
     std::optional<SandboxInspector> inspector;
     if (outcome == FirstRunOutcome::LaunchSandboxInspector)
         inspector.emplace(*p.audio, *p.input, *rawLogger, 440.0f, &entityManager);
@@ -287,6 +320,29 @@ int main(int argc, char** argv) {
     gameLoop.start();
 
     // Step 18: Shell loop — main thread owns all HAL.
+    // Angled sun (better PBR shading than the default straight-down direction).
+    EnvironmentState env{};
+    env.sunDirection = glm::normalize(glm::vec3{0.6f, -1.0f, 0.4f});
+
+    // Sandbox demo: static fire emitter at world origin exercises the GPU particle pass
+    // from frame 1 without requiring any entity damage state.  effectName points to a
+    // string literal so the pointer is stable for the lifetime of the loop.
+    static const ParticleEmitterState kDemoFire{
+        {0.0f, 10.0f, 0.0f}, // position
+        "fire",              // effectName
+        1.5f,                // intensity
+        80.0f,               // spawnRate
+        2.0f,                // particleLifetime
+        8.0f,                // initialSpeed
+        {1.0f, 0.6f, 0.1f},  // colorStart
+        {0.2f, 0.1f, 0.05f}, // colorEnd
+        0.5f,                // sizeStart
+        2.5f,                // sizeEnd
+        true,                // additive (fire/explosion)
+    };
+    const std::span<const ParticleEmitterState> sandboxEmitters =
+        inspector ? std::span<const ParticleEmitterState>{&kDemoFire, 1} : std::span<const ParticleEmitterState>{};
+
     bool running = true;
     while (running && !p.window->shouldClose()) {
         p.window->pollEvents();
@@ -296,7 +352,7 @@ int main(int argc, char** argv) {
         float alpha = gameLoop.shellTick();
         float aspect =
             static_cast<float>(p.window->width()) / static_cast<float>(p.window->height() > 0 ? p.window->height() : 1);
-        sceneRenderer.renderFrame(alpha, cameraController.view(aspect), EnvironmentState{});
+        sceneRenderer.renderFrame(alpha, cameraController.view(aspect), env, sandboxEmitters);
         p.renderer->endFrame();
         p.input->flush();
         p.joystick->flush();
