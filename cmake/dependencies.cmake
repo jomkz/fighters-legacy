@@ -129,7 +129,11 @@ else()
         SYSTEM
         # yaml-cpp 0.8.0 uses cmake_minimum_required(VERSION 2.8.12) which CMake 4.x
         # no longer accepts. Patch the minimum version before configuration.
-        PATCH_COMMAND  ${CMAKE_COMMAND} -P "${CMAKE_SOURCE_DIR}/cmake/patch_yaml_cpp.cmake"
+        # <SOURCE_DIR> is expanded by FetchContent/ExternalProject to the absolute
+        # path of the fetched source directory at run time.
+        PATCH_COMMAND  ${CMAKE_COMMAND}
+                       "-DFILE=<SOURCE_DIR>/CMakeLists.txt"
+                       -P "${CMAKE_SOURCE_DIR}/cmake/patch_yaml_cpp.cmake"
     )
     FetchContent_MakeAvailable(yaml-cpp)
 endif()
