@@ -2,7 +2,7 @@
 if(TARGET platform-sdl3 AND TARGET platform-vulkan)
     add_executable(hello_triangle hello_triangle/main.cpp)
     target_link_libraries(hello_triangle
-        PRIVATE platform-sdl3 platform-vulkan platform-hal engine-render Vulkan::Vulkan
+        PRIVATE platform-sdl3 platform-vulkan platform-hal engine-render SDL3::SDL3 Vulkan::Vulkan
     )
     # engine-render: adds the engine/ include root (for render/BuiltinGeometry.h) and
     # transitively links platform-hal + GLM.  engine-content is a PRIVATE dep of
