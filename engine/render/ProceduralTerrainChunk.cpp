@@ -86,8 +86,9 @@ std::vector<uint16_t> generateProceduralChunk(int cx, int cy, const TerrainManif
     constexpr int kPixels = 513;
     std::vector<uint16_t> out(kPixels * kPixels);
 
-    // One pixel covers chunkSizeM / 512 metres.
-    const float pixelSizeM = manifest.chunkSizeM / 512.f;
+    // One pixel covers chunkSizeM / 512 metres. Keep as double so the
+    // per-pixel addition stays in double precision before casting to float.
+    const double pixelSizeM = static_cast<double>(manifest.chunkSizeM) / 512.0;
 
     // World-space X and Z of the SW corner of this chunk.
     const double chunkOriginX = manifest.originX + static_cast<double>(cx) * manifest.chunkSizeM;
