@@ -393,29 +393,55 @@ story:
 
 ## Terrain — Streaming Heightmap Chunks + JSON
 
-- Grid of fixed-size PNG chunks; any grid dimension (no 32×32 cap)
-- Each chunk: 513×513 pixels, 16-bit grayscale; 15,360 m per chunk (512 intervals × 30 m, matching Copernicus GLO-30 resolution)
-- Three LOD levels: LOD 0 = 513×513, LOD 1 = 257×257, LOD 2 = 129×129
-- Chunk path convention: `terrain/<id>/lod<n>/chunk_<x>_<y>.png` (4-digit zero-padded coordinates, e.g. `chunk_0002_0007.png`)
-- Chunks loaded/unloaded at runtime based on player position; theater content packs override individual chunks at higher mod priority
+The engine uses a single continuous world terrain. Theaters are geographic regions within it — they are mission conditions, not separate grids.
+
+- **Terrain ID:** `"world"` is the canonical ID used by fl-base-pack. Theater packs override individual chunks at higher mod priority.
+- **Chunk size:** 15,360 m (512 intervals × 30 m — native Copernicus GLO-30 resolution, no upsampling required)
+- **Chunk format:** 513×513 pixels, 16-bit grayscale PNG
+- **LOD levels:** LOD 0 = 513×513 px (30 m/px), LOD 1 = 257×257 px (60 m/px), LOD 2 = 129×129 px (120 m/px)
+- **Chunk path convention:** `terrain/<id>/lod<n>/chunk_<x>_<y>.png` — all lowercase, 4-digit zero-padded coordinates (e.g. `chunk_0003_0007.png`). Paths are fully determined by convention; no manifest field needed.
+
+**World manifest (`terrain/world.json`):**
 
 ```json
 {
-  "name": "Ukraine",
+  "name": "World",
   "chunk_size_m": 15360,
   "lod_levels": 3,
-  "grid_width": 64,
-  "grid_height": 64,
+  "grid_width": 256,
+  "grid_height": 256,
   "elevation_scale": 10,
-  "chunks_dir": "terrain/world/",
-  "surface_classes_dir": "terrain/ukraine_surface/",
   "textures": {
     "0": "terrain_grass.ktx2",
     "1": "terrain_water.ktx2",
-    "2": "terrain_urban.ktx2"
+    "2": "terrain_urban.ktx2",
+    "3": "terrain_desert.ktx2"
   }
 }
 ```
+
+---
+
+## Theater Manifest — TOML
+
+Theaters define geographic regions within the world terrain. A theater bounds box is used as a mission condition (e.g. leaving the area triggers failure) — it does not restrict engine terrain streaming or player movement. Players can fly anywhere in the world in sandbox mode.
+
+Theater manifests live in `theaters/<id>.toml` inside a content pack.
+
+```toml
+[theater]
+id     = "ukraine"
+name   = "Ukraine"
+bounds = { min_x = 500000, min_z = 200000, max_x = 800000, max_z = 500000 }  # meters, world coords
+layer  = "ukraine_clear"   # default weather/lighting layer for this theater
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | Unique identifier; matches `map:` field in mission YAML |
+| `name` | string | Display name |
+| `bounds` | table | Rectangular region in world coordinates (meters, right-handed Y-up) |
+| `layer` | string | Default weather/lighting preset (references a layer definition) |
 
 ---
 
