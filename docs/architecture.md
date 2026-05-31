@@ -204,6 +204,36 @@ mods/
 
 **TOML vs YAML:** TOML is used for definition and configuration data (flight models, weapon specs, unit data, mod manifests, HUD layouts, playlists). These files have fixed schemas, typed values, and benefit from TOML's parse-time type enforcement and clean Git diffs. YAML is used for mission and campaign files, which are document-like: arbitrary nesting depth, large object lists, and YAML anchors/aliases let shared definitions be referenced multiple times without repetition. The rule of thumb is: does this look like a settings file (TOML) or a scenario/narrative document (YAML)?
 
+## World Terrain Architecture
+
+The engine uses a single continuous **world terrain** rather than per-theater heightmap grids. Players can fly anywhere in the world in a single session; theater boundaries are mission conditions (triggering failure when crossed), not engine limits.
+
+### World coordinate system
+
+All entity positions, terrain queries, and camera origins use **double-precision (`glm::dvec3`)** world coordinates throughout the engine — `EntityTransform::pos`, `MsgEntityEntry::pos`, `EntityRenderEntry::position`, and `CameraView::worldOrigin` are all `double`/`dvec3`. The coordinate space is right-handed Y-up, in meters, matching glTF. Camera-relative rendering subtracts `worldOrigin` before GPU upload and casts the small relative offset to `vec3` — float32-safe at any scale including planet-scale distances.
+
+### Chunk format
+
+| Property | Value |
+|---|---|
+| Chunk size | 15,360 m (512 intervals × 30 m) |
+| Resolution | 513×513 pixels, 16-bit grayscale PNG |
+| DEM source | Copernicus GLO-30 (ESA, 30 m global, free) — no upsampling required |
+| LOD 0 | 513×513 px, 30 m/px, streamed within ~46 km (3×3 chunks) |
+| LOD 1 | 257×257 px, 60 m/px, streamed within ~77 km (5×5 chunks) |
+| LOD 2 | 129×129 px, 120 m/px, streamed within ~107 km (7×7 chunks) |
+| Eviction | Beyond ~120 km; max ~83 chunks in memory at steady state |
+
+### Terrain ID and overrides
+
+`"world"` is the canonical terrain ID. fl-base-pack provides global coverage at base priority. Theater content packs override individual chunks at higher mod priority via `IContentPack::resolveTerrainChunk(terrainId, chunkX, chunkY, lod)` — the engine walks the content stack and uses the first pack that resolves a given chunk.
+
+### Theaters
+
+Theaters are geographic bounding boxes in world coordinates defined by `theaters/<id>.toml` in a content pack. They are mission-layer concepts: the engine does not partition terrain by theater, and terrain streaming is always camera-driven across the full world grid.
+
+---
+
 ## Repository Naming Convention
 
 All first-party repositories and binaries in the fighters-legacy ecosystem use the `fl-` prefix. Content pack plugins for specific external games use a `<game>-content` pattern. Core repositories keep their full names.
