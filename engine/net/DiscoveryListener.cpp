@@ -69,8 +69,7 @@ std::string formatAddr(const sockaddr* sa) {
 // DiscoveryListener
 // ---------------------------------------------------------------------------
 
-DiscoveryListener::DiscoveryListener(uint16_t port, ILogger& log, int ttlMs)
-    : m_port(port), m_ttlMs(ttlMs), m_log(&log) {
+DiscoveryListener::DiscoveryListener(uint16_t port, ILogger& log, int ttlMs) : m_ttlMs(ttlMs), m_log(&log) {
 #if defined(_WIN32)
     WSADATA wsa{};
     int err = WSAStartup(MAKEWORD(2, 2), &wsa);

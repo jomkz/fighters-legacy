@@ -70,7 +70,6 @@ class DiscoveryListener {
     int m_sock6{-1};
 #endif
 
-    uint16_t m_port;
     int m_ttlMs;
     ILogger* m_log{nullptr};
     std::vector<ServerInfo> m_servers;
