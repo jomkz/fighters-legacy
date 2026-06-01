@@ -80,7 +80,7 @@ void FlightHud::update(const EntityRenderEntry* e) {
 
     // Damage warning in red (center screen)
     if (e->damageLevel > 0)
-        pushText(0.40f, 0.48f, 1.f, 0.2f, 0.2f, "*** DAMAGE ***");
+        pushText(0.40f, 0.48f, 1.f, 0.2f, 0.2f, "%s", "*** DAMAGE ***");
 }
 
 std::span<const HudElement> FlightHud::elements() const {
