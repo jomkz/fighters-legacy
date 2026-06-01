@@ -38,7 +38,7 @@ static void quatMul(const float a[4], const float b[4], float out[4]) {
 }
 
 static void quatNormalize(float q[4]) {
-    float mag = std::sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    float mag = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
     if (mag > 1e-6f) {
         q[0] /= mag;
         q[1] /= mag;
@@ -171,8 +171,8 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         inp.rudder = std::clamp(msg.rudder, -1.f, 1.f);
         inp.buttons = msg.buttons;
 
-        float vmag = std::sqrtf(msg.viewAxis[0] * msg.viewAxis[0] + msg.viewAxis[1] * msg.viewAxis[1] +
-                                msg.viewAxis[2] * msg.viewAxis[2]);
+        float vmag = std::sqrt(msg.viewAxis[0] * msg.viewAxis[0] + msg.viewAxis[1] * msg.viewAxis[1] +
+                               msg.viewAxis[2] * msg.viewAxis[2]);
         if (vmag > 1e-6f) {
             inp.viewAxis[0] = msg.viewAxis[0] / vmag;
             inp.viewAxis[1] = msg.viewAxis[1] / vmag;
