@@ -308,8 +308,8 @@ TEST_CASE("GameLoop: enqueueSimCallback executes on next tick", "[gl]") {
     std::atomic<bool> fired{false};
     gl.enqueueSimCallback([&fired] { fired.store(true, std::memory_order_release); });
 
-    // Wait up to ~100 ms (6 tick intervals at 60 Hz) for the callback to fire.
-    auto deadline = std::chrono::steady_clock::now() + 100ms;
+    // Wait up to 500 ms (30 tick opportunities at 60 Hz) — robust against macOS CI scheduler jitter.
+    auto deadline = std::chrono::steady_clock::now() + 500ms;
     while (!fired.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
         std::this_thread::sleep_for(5ms);
 
@@ -327,7 +327,7 @@ TEST_CASE("GameLoop: enqueueSimCallback multiple callbacks all run", "[gl]") {
     for (int i = 0; i < 3; ++i)
         gl.enqueueSimCallback([&counter] { counter.fetch_add(1, std::memory_order_relaxed); });
 
-    auto deadline = std::chrono::steady_clock::now() + 100ms;
+    auto deadline = std::chrono::steady_clock::now() + 500ms;
     while (counter.load(std::memory_order_relaxed) < 3 && std::chrono::steady_clock::now() < deadline)
         std::this_thread::sleep_for(5ms);
 

@@ -217,6 +217,7 @@ Pre-defined tasks are committed in `.vscode/tasks.json` and available via **Term
 |---|---|
 | Build (Debug) / Build (Release) | Configure + build the selected preset |
 | Test (Debug) | `ctest --preset debug --output-on-failure` |
+| Coverage (engine/ branch summary) | Build coverage preset, run all tests, print `engine/` branch % vs 80% gate |
 | CI: clang-format check | Dry-run clang-format-22 on files changed vs `origin/main` |
 | CI: REUSE lint | Check SPDX headers on all source files |
 | CI: Smoke tests | Run `--version` on every built binary |
