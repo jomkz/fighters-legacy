@@ -553,3 +553,10 @@ To report phase completion against target dates:
 ```
 
 Queries the [GitHub Project](https://github.com/users/jomkz/projects/2) via `gh` and prints a per-phase progress table showing % done, % of time elapsed, and an on-track/at-risk/behind/overdue signal. Requires `gh` (authenticated) and GNU `date`.
+
+---
+
+## Sandbox reference
+
+Key bindings, camera modes, flight controls, and debug console commands are documented in
+[docs/sandbox.md](sandbox.md).
