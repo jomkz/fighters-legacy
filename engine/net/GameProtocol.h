@@ -20,6 +20,7 @@ enum class MsgId : uint8_t {
     WorldSnapshot = 0x02, // server→client, unreliable: broadcast every sim tick
     ClientInput = 0x03,   // client→server, reliable: sent each frame
     WeatherState = 0x04,  // server→client, unreliable: broadcast every 10 ticks (~6 Hz); additive ID
+    ServerNotice = 0x05,  // server→client, reliable: shutdown countdown and operator notices; additive ID
     LanBeacon = 0x10,     // raw UDP broadcast — not sent over ENet; server→LAN presence packet
 };
 
@@ -143,6 +144,20 @@ static_assert(offsetof(MsgWeatherState, fogDensity) == 4u, "MsgWeatherState::fog
 static_assert(offsetof(MsgWeatherState, fogStartDist) == 8u, "MsgWeatherState::fogStartDist offset changed");
 static_assert(offsetof(MsgWeatherState, windX) == 12u, "MsgWeatherState::windX offset changed");
 static_assert(offsetof(MsgWeatherState, windZ) == 16u, "MsgWeatherState::windZ offset changed");
+
+// Reliable, server→client. Sent at each countdown interval and at T=0 before graceful disconnect.
+// Old clients that don't recognise msgId 0x05 silently discard — no kProtocolVersion bump.
+// secondsRemaining == 0 means shutdown is imminent (final notice).
+// text is null-terminated UTF-8; guaranteed within 60 bytes by the server.
+struct MsgServerNotice {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::ServerNotice)}; // offset 0
+    uint8_t _pad{0};                                          // offset 1
+    uint16_t secondsRemaining{0};                             // offset 2
+    char text[60]{};                                          // offset 4
+}; // 64 bytes
+static_assert(sizeof(MsgServerNotice) == 64u, "MsgServerNotice wire size changed");
+static_assert(offsetof(MsgServerNotice, secondsRemaining) == 2u, "MsgServerNotice::secondsRemaining offset changed");
+static_assert(offsetof(MsgServerNotice, text) == 4u, "MsgServerNotice::text offset changed");
 
 // Raw UDP presence broadcast sent by fl-server on 255.255.255.255:<port> (IPv4 broadcast) and
 // [ff02::1]:<port> (IPv6 link-local multicast) every discoveryIntervalMs milliseconds.

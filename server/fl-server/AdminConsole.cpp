@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -53,6 +54,57 @@ static std::string extractIp(std::string_view addrPort) {
         ipv = (colon != std::string_view::npos) ? v.substr(0, colon) : v;
     }
     return normalizeIp(ipv);
+}
+
+// Parse a duration string into seconds.
+// Accepts: bare integer (seconds), Ns, Nm, Nh, and compound NhNm.
+// Returns nullopt on parse error.
+static std::optional<uint32_t> parseDurationSecs(std::string_view s) {
+    if (s.empty())
+        return std::nullopt;
+
+    uint32_t total = 0;
+    bool consumed = false;
+
+    auto parseNum = [&](std::string_view& v, uint32_t& out) -> bool {
+        if (v.empty() || v[0] < '0' || v[0] > '9')
+            return false;
+        uint64_t n = 0;
+        std::size_t i = 0;
+        while (i < v.size() && v[i] >= '0' && v[i] <= '9') {
+            n = n * 10 + static_cast<uint64_t>(v[i] - '0');
+            ++i;
+        }
+        if (n > UINT32_MAX)
+            return false;
+        out = static_cast<uint32_t>(n);
+        v.remove_prefix(i);
+        return true;
+    };
+
+    uint32_t n = 0;
+    while (!s.empty()) {
+        if (!parseNum(s, n))
+            return std::nullopt;
+        consumed = true;
+        if (s.empty()) {
+            total += n; // bare integer → seconds
+            break;
+        }
+        char unit = s[0];
+        s.remove_prefix(1);
+        if (unit == 's' || unit == 'S') {
+            total += n;
+        } else if (unit == 'm' || unit == 'M') {
+            total += n * 60u;
+        } else if (unit == 'h' || unit == 'H') {
+            total += n * 3600u;
+        } else {
+            return std::nullopt;
+        }
+    }
+
+    return consumed ? std::optional<uint32_t>(total) : std::nullopt;
 }
 
 // Returns true when arg consists entirely of ASCII digits (treat as peerId).
@@ -383,6 +435,122 @@ void registerServerCommands(DebugCommandRegistry& registry, ServerCommandContext
                                                ctx.allowlistPath->c_str());
                                  return buf;
                              });
+
+    // shutdown
+    registry.registerCommand(
+        "shutdown",
+        "shutdown [--in <dur>] [--interval <dur>] [--delay <dur>] [--cancel] [--now] [--force]"
+        "  -- schedule/cancel fl-server graceful shutdown with countdown notices",
+        [ctx](std::span<std::string_view> args) -> std::string {
+            if (!ctx.broadcaster || !ctx.gameLoop)
+                return "shutdown: not available";
+
+            // Parse flags.
+            bool flagCancel = false, flagNow = false, flagForce = false;
+            std::optional<uint32_t> flagIn;
+            std::optional<uint32_t> flagInterval;
+            std::optional<uint32_t> flagDelay;
+
+            for (std::size_t i = 0; i < args.size(); ++i) {
+                if (args[i] == "--cancel") {
+                    flagCancel = true;
+                } else if (args[i] == "--now") {
+                    flagNow = true;
+                } else if (args[i] == "--force") {
+                    flagForce = true;
+                } else if (args[i] == "--in") {
+                    if (i + 1 >= args.size())
+                        return "shutdown: --in requires a duration (e.g. 30m, 60s, 1h30m)";
+                    flagIn = parseDurationSecs(args[++i]);
+                    if (!flagIn)
+                        return "shutdown: invalid duration for --in";
+                } else if (args[i] == "--interval") {
+                    if (i + 1 >= args.size())
+                        return "shutdown: --interval requires a duration";
+                    flagInterval = parseDurationSecs(args[++i]);
+                    if (!flagInterval)
+                        return "shutdown: invalid duration for --interval";
+                } else if (args[i] == "--delay") {
+                    if (i + 1 >= args.size())
+                        return "shutdown: --delay requires a duration";
+                    flagDelay = parseDurationSecs(args[++i]);
+                    if (!flagDelay)
+                        return "shutdown: invalid duration for --delay";
+                } else {
+                    return "shutdown: unknown flag: " + std::string(args[i]);
+                }
+            }
+
+            // No args → show status (enqueue sim-thread read).
+            if (!flagCancel && !flagNow && !flagIn && !flagDelay) {
+                ctx.gameLoop->enqueueSimCallback([ctx]() {
+                    if (ctx.broadcaster->isShuttingDown()) {
+                        uint32_t secs = ctx.broadcaster->secondsUntilShutdown();
+                        std::printf("[admin] shutdown scheduled in %u seconds\n", secs);
+                    } else {
+                        std::printf("[admin] no shutdown scheduled\n");
+                    }
+                    std::fflush(stdout);
+                });
+                return {};
+            }
+
+            // --cancel
+            if (flagCancel) {
+                ctx.gameLoop->enqueueSimCallback([ctx]() { ctx.broadcaster->cancelShutdown(); });
+                return "shutdown: cancelled";
+            }
+
+            // --delay (push back existing shutdown)
+            if (flagDelay) {
+                uint32_t extra = *flagDelay;
+                ctx.gameLoop->enqueueSimCallback([ctx, extra]() {
+                    if (!ctx.broadcaster->extendShutdown(extra))
+                        std::printf("[admin] shutdown --delay: no active shutdown\n");
+                    else
+                        std::printf("[admin] shutdown delayed by %u seconds\n", extra);
+                    std::fflush(stdout);
+                });
+                return {};
+            }
+
+            // --now or --in: confirmation gate.
+            if (ctx.shutdownRequireConfirm && !flagForce) {
+                if (flagNow)
+                    return "Server will shut down immediately. Re-run with --force to confirm.";
+                uint32_t secs = *flagIn;
+                uint32_t mins = secs / 60;
+                char buf[128];
+                if (mins > 0)
+                    std::snprintf(buf, sizeof(buf),
+                                  "Server will shut down in %u minute(s). Re-run with --force to confirm.", mins);
+                else
+                    std::snprintf(buf, sizeof(buf),
+                                  "Server will shut down in %u second(s). Re-run with --force to confirm.", secs);
+                return buf;
+            }
+
+            // Enforce minimum delay (--now bypasses this).
+            if (flagIn && *flagIn < ctx.minShutdownDelayS) {
+                char buf[128];
+                std::snprintf(buf, sizeof(buf),
+                              "shutdown: delay must be at least %u seconds (config min_shutdown_delay_s)",
+                              ctx.minShutdownDelayS);
+                return buf;
+            }
+
+            // Schedule shutdown.
+            uint32_t delaySecs = flagNow ? 0u : *flagIn;
+            uint32_t intervalSecs = flagInterval.value_or(ctx.shutdownWarningIntervalS);
+            ctx.gameLoop->enqueueSimCallback(
+                [ctx, delaySecs, intervalSecs]() { ctx.broadcaster->initiateShutdown(delaySecs, intervalSecs); });
+
+            if (flagNow)
+                return "shutdown: broadcasting immediate shutdown notice...";
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "shutdown: scheduled in %u seconds", delaySecs);
+            return buf;
+        });
 
     // quit
     registry.registerCommand("quit", "quit  -- shut down fl-server gracefully",

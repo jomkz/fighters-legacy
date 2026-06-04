@@ -76,6 +76,9 @@ class DebugConsole : public ITextInputHandler {
     // Dispatch a line directly (bypasses input buffer; records history + output).
     void execute(std::string_view line);
 
+    // Append a line to the output ring without command dispatch (e.g. server notices).
+    void print(std::string line);
+
     // Access the showPos flag so DebugCommands can toggle it.
     [[nodiscard]] bool& showPosRef() noexcept {
         return m_showPos;

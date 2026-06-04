@@ -1387,3 +1387,270 @@ TEST_CASE("WorldBroadcaster: rate limit prune removes fully expired entries", "[
     broadcaster.onConnect(0u);
     CHECK(net.disconnectedPeers.empty());
 }
+
+// ---------------------------------------------------------------------------
+// Shutdown countdown tests
+// ---------------------------------------------------------------------------
+
+// Find the first MsgServerNotice in broadcasts from index `from`.
+static bool findNotice(const std::vector<std::vector<uint8_t>>& broadcasts, std::size_t from,
+                       fl::MsgServerNotice& out) {
+    for (std::size_t i = from; i < broadcasts.size(); ++i) {
+        const auto& pkt = broadcasts[i];
+        if (pkt.size() == sizeof(fl::MsgServerNotice) && pkt[0] == static_cast<uint8_t>(fl::MsgId::ServerNotice)) {
+            std::memcpy(&out, pkt.data(), sizeof(out));
+            return true;
+        }
+    }
+    return false;
+}
+
+TEST_CASE("WorldBroadcaster: initiateShutdown broadcasts first notice on next tick", "[world_broadcaster][shutdown]") {
+    MockNetwork net;
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.initiateShutdown(30, 5);
+
+    CHECK(broadcaster.isShuttingDown());
+    CHECK(broadcaster.secondsUntilShutdown() <= 30u);
+
+    broadcaster.onTick(1.0 / 60.0, 0u);
+
+    fl::MsgServerNotice notice{};
+    REQUIRE(findNotice(net.broadcasts, 0, notice));
+    CHECK(notice.secondsRemaining > 0u);
+    CHECK(notice.secondsRemaining <= 30u);
+    CHECK(notice.text[0] != '\0');
+}
+
+TEST_CASE("WorldBroadcaster: no notice broadcast when interval not reached", "[world_broadcaster][shutdown]") {
+    MockNetwork net;
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.initiateShutdown(60, 30); // 30s interval
+
+    // First tick fires first notice.
+    broadcaster.onTick(1.0 / 60.0, 0u);
+    std::size_t noticesAfterFirst = 0;
+    for (const auto& pkt : net.broadcasts)
+        if (pkt.size() == sizeof(fl::MsgServerNotice) && pkt[0] == static_cast<uint8_t>(fl::MsgId::ServerNotice))
+            ++noticesAfterFirst;
+    REQUIRE(noticesAfterFirst == 1u);
+
+    // Advance only 10s (halfway through 30s interval) — no new notice expected.
+    t += std::chrono::seconds(10);
+    net.broadcasts.clear();
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    std::size_t newNotices = 0;
+    for (const auto& pkt : net.broadcasts)
+        if (pkt.size() == sizeof(fl::MsgServerNotice) && pkt[0] == static_cast<uint8_t>(fl::MsgId::ServerNotice))
+            ++newNotices;
+    CHECK(newNotices == 0u);
+}
+
+TEST_CASE("WorldBroadcaster: cancelShutdown stops countdown", "[world_broadcaster][shutdown]") {
+    MockNetwork net;
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.initiateShutdown(60, 30);
+    broadcaster.onTick(1.0 / 60.0, 0u);
+    broadcaster.cancelShutdown();
+    CHECK(!broadcaster.isShuttingDown());
+
+    net.broadcasts.clear();
+    t += std::chrono::seconds(70); // past original shutdown time
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    fl::MsgServerNotice notice{};
+    CHECK(!findNotice(net.broadcasts, 0, notice));
+}
+
+TEST_CASE("WorldBroadcaster: extendShutdown pushes back and fires immediate notice", "[world_broadcaster][shutdown]") {
+    MockNetwork net;
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.initiateShutdown(30, 5);
+    broadcaster.onTick(1.0 / 60.0, 0u);
+
+    t += std::chrono::seconds(20);
+    net.broadcasts.clear();
+
+    REQUIRE(broadcaster.extendShutdown(60u));
+
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    fl::MsgServerNotice notice{};
+    REQUIRE(findNotice(net.broadcasts, 0, notice));
+    CHECK(notice.secondsRemaining > 50u); // ~70s remaining after extension
+}
+
+TEST_CASE("WorldBroadcaster: extendShutdown returns false when not shutting down", "[world_broadcaster][shutdown]") {
+    MockNetwork net;
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    CHECK(!broadcaster.extendShutdown(60u));
+}
+
+TEST_CASE("WorldBroadcaster: shutdown callback fires at T=0", "[world_broadcaster][shutdown]") {
+    MockNetwork net;
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    bool called = false;
+    broadcaster.setShutdownCallback([&called]() { called = true; });
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.initiateShutdown(10, 5);
+
+    t += std::chrono::seconds(11);
+    broadcaster.onTick(1.0 / 60.0, 0u);
+
+    CHECK(called);
+    CHECK(!broadcaster.isShuttingDown());
+    CHECK(broadcaster.secondsUntilShutdown() == 0u);
+}
+
+TEST_CASE("WorldBroadcaster: T=0 fires without crash when no callback set", "[world_broadcaster][shutdown]") {
+    MockNetwork net;
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.initiateShutdown(0, 0);
+
+    broadcaster.onTick(1.0 / 60.0, 0u);
+
+    fl::MsgServerNotice notice{};
+    REQUIRE(findNotice(net.broadcasts, 0, notice));
+    CHECK(notice.secondsRemaining == 0u);
+    CHECK(!broadcaster.isShuttingDown());
+}
+
+TEST_CASE("WorldBroadcaster: initiateShutdown delay=0 fires on very next tick", "[world_broadcaster][shutdown]") {
+    MockNetwork net;
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    bool called = false;
+    broadcaster.setShutdownCallback([&called]() { called = true; });
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.initiateShutdown(0, 0);
+
+    broadcaster.onTick(1.0 / 60.0, 0u);
+
+    fl::MsgServerNotice notice{};
+    REQUIRE(findNotice(net.broadcasts, 0, notice));
+    CHECK(notice.secondsRemaining == 0u);
+    CHECK(called);
+}
+
+TEST_CASE("WorldBroadcaster: T-60 notice always fires with 5-min interval", "[world_broadcaster][shutdown]") {
+    MockNetwork net;
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.initiateShutdown(600, 300); // 10 min, 5-min interval
+
+    broadcaster.onTick(1.0 / 60.0, 0u); // first notice at T-600s
+
+    // Advance to T-61s (would skip T-60s without the clamp logic).
+    t += std::chrono::seconds(539);
+    net.broadcasts.clear();
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    fl::MsgServerNotice notice{};
+    REQUIRE(findNotice(net.broadcasts, 0, notice));
+    CHECK(notice.secondsRemaining <= 62u);
+    CHECK(notice.secondsRemaining >= 58u);
+}
+
+TEST_CASE("WorldBroadcaster: notice text contains hours for delays >= 3600s", "[world_broadcaster][shutdown]") {
+    MockNetwork net;
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.initiateShutdown(7200, 3600);
+
+    broadcaster.onTick(1.0 / 60.0, 0u);
+
+    fl::MsgServerNotice notice{};
+    REQUIRE(findNotice(net.broadcasts, 0, notice));
+    CHECK(std::string(notice.text).find("hour") != std::string::npos);
+}
+
+TEST_CASE("WorldBroadcaster: notice text contains minutes for delays 61-3599s", "[world_broadcaster][shutdown]") {
+    MockNetwork net;
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.initiateShutdown(300, 60);
+
+    broadcaster.onTick(1.0 / 60.0, 0u);
+
+    fl::MsgServerNotice notice{};
+    REQUIRE(findNotice(net.broadcasts, 0, notice));
+    CHECK(std::string(notice.text).find("minute") != std::string::npos);
+}
+
+TEST_CASE("WorldBroadcaster: notice text uses final-minute wording at T-60s", "[world_broadcaster][shutdown]") {
+    MockNetwork net;
+    MockLogger logger;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    auto t = std::chrono::steady_clock::now();
+    broadcaster.setClockOverride([&t]() { return t; });
+    broadcaster.initiateShutdown(300, 60);
+
+    t += std::chrono::seconds(245); // T-55s remaining
+    broadcaster.onTick(1.0 / 60.0, 0u);
+
+    fl::MsgServerNotice notice{};
+    REQUIRE(findNotice(net.broadcasts, 0, notice));
+    CHECK(std::string(notice.text).find("1 minute") != std::string::npos);
+}

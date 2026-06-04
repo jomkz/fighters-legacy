@@ -94,6 +94,10 @@ void DebugConsole::onTextEdit(const char* /*comp*/, int /*start*/) {
     // IME composition preview — not shown in current implementation
 }
 
+void DebugConsole::print(std::string line) {
+    pushOutput(std::move(line));
+}
+
 void DebugConsole::execute(std::string_view line) {
     if (line.empty())
         return;

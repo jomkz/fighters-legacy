@@ -33,6 +33,7 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 | `WorldSnapshot` | `0x02` | server→client | unreliable | 12 + N×68 bytes | Per-tick entity state broadcast |
 | `ClientInput` | `0x03` | client→server | reliable | 44 bytes | Per-frame flight inputs |
 | `WeatherState` | `0x04` | server→client | unreliable | 20 bytes | Weather and time-of-day; broadcast every 10 ticks (~6 Hz). Additive ID — old clients silently discard. |
+| `ServerNotice` | `0x05` | server→client | reliable | 64 bytes | Shutdown countdown notification; sent at each warning interval and at T=0. Additive ID — old clients silently discard. |
 | `LanBeacon` | `0x10` | server→LAN | raw UDP (not ENet) | 74 bytes | LAN server presence broadcast |
 
 ## Struct Definitions
@@ -144,6 +145,29 @@ at offset 2 (ARM64 alignment constraint). Decode: `timeOfDay = timeOfDayTenths /
 
 Wind convention: `windX` and `windZ` are the **blowing-toward** direction. A westerly wind (FROM 270°) has `windX > 0`.
 `windY` is always zero (horizontal wind only).
+
+### MsgServerNotice — 64 bytes
+
+Reliable, server→client. Sent at each countdown interval during a graceful shutdown sequence and
+once more at T=0 immediately before the server disconnects all peers.
+`MsgId::ServerNotice = 0x05` is an additive message ID — clients that do not recognize it silently
+discard without error. `kProtocolVersion` is **not** bumped.
+
+`secondsRemaining == 0` indicates the server is shutting down immediately. The `text` field is
+null-terminated UTF-8 (maximum 60 bytes including the NUL terminator); always read with
+`sn.text[59] = '\0'` as a defensive guard.
+
+| Offset | Size | Field | Type | Notes |
+|---|---|---|---|---|
+| 0 | 1 | `msgId` | `uint8_t` | `0x05` |
+| 1 | 1 | `_pad` | `uint8_t` | reserved, always 0 |
+| 2 | 2 | `secondsRemaining` | `uint16_t` | seconds until shutdown; 0 = shutting down now |
+| 4 | 60 | `text` | `char[60]` | null-terminated UTF-8 operator message |
+
+**Sending cadence (fl-server):** first notice fires immediately when `shutdown --in <dur>` is
+issued; subsequent notices fire every `shutdown.warning_interval_s` seconds (default 300 s); a
+T-60s notice is always injected if the configured interval would skip past it. At T=0 a final
+`secondsRemaining=0` notice is sent before graceful disconnect.
 
 ### MsgLanBeacon — 74 bytes
 

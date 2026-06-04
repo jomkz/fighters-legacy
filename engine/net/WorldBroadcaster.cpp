@@ -247,6 +247,25 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         }
     }
 
+    // Shutdown countdown: fire at each interval and at T=0.
+    if (m_shuttingDown) {
+        using namespace std::chrono;
+        auto now = m_now();
+        if (now >= m_shutdownAt) {
+            broadcastShutdownNotice(0, "Server is shutting down now.");
+            m_shuttingDown = false;
+            if (m_shutdownCallback)
+                m_shutdownCallback();
+        } else if (now >= m_nextNoticeAt) {
+            auto secsLeft = static_cast<uint32_t>(duration_cast<seconds>(m_shutdownAt - now).count());
+            broadcastShutdownNotice(static_cast<uint16_t>(secsLeft), makeShutdownMessage(secsLeft).c_str());
+            // Always squeeze in a T-60s notice: if the next interval would skip past it, clamp.
+            auto nextInterval = now + seconds(m_warningIntervalS);
+            auto oneMinBefore = m_shutdownAt - seconds(60);
+            m_nextNoticeAt = (nextInterval > oneMinBefore && oneMinBefore > now) ? oneMinBefore : nextInterval;
+        }
+    }
+
     m_net.service(0);
 }
 
@@ -466,6 +485,59 @@ void WorldBroadcaster::sendConnectAck(uint32_t peerId, EntityId assigned) {
     }
 
     m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/true);
+}
+
+// ---------------------------------------------------------------------------
+// Shutdown countdown
+// ---------------------------------------------------------------------------
+
+void WorldBroadcaster::setShutdownCallback(std::function<void()> fn) {
+    m_shutdownCallback = std::move(fn);
+}
+
+void WorldBroadcaster::initiateShutdown(uint32_t secondsDelay, uint32_t warningIntervalS) {
+    using namespace std::chrono;
+    m_shuttingDown = true;
+    m_shutdownAt = m_now() + seconds(secondsDelay);
+    m_warningIntervalS = warningIntervalS;
+    m_nextNoticeAt = m_now(); // fire on the very next tick
+}
+
+void WorldBroadcaster::cancelShutdown() {
+    m_shuttingDown = false;
+}
+
+bool WorldBroadcaster::extendShutdown(uint32_t additionalSeconds) {
+    if (!m_shuttingDown)
+        return false;
+    m_shutdownAt += std::chrono::seconds(additionalSeconds);
+    m_nextNoticeAt = m_now(); // immediate update notice on next tick
+    return true;
+}
+
+uint32_t WorldBroadcaster::secondsUntilShutdown() const noexcept {
+    if (!m_shuttingDown)
+        return 0;
+    using namespace std::chrono;
+    auto now = m_now();
+    if (now >= m_shutdownAt)
+        return 0;
+    return static_cast<uint32_t>(duration_cast<seconds>(m_shutdownAt - now).count());
+}
+
+std::string WorldBroadcaster::makeShutdownMessage(uint32_t secsLeft) {
+    if (secsLeft <= 60)
+        return "Server shutting down in 1 minute -- save your progress.";
+    if (secsLeft < 3600)
+        return "Server shutting down in " + std::to_string(secsLeft / 60) + " minutes.";
+    return "Server shutting down in " + std::to_string(secsLeft / 3600) + " hour(s).";
+}
+
+void WorldBroadcaster::broadcastShutdownNotice(uint16_t secsLeft, const char* text) {
+    MsgServerNotice notice;
+    notice.secondsRemaining = secsLeft;
+    std::snprintf(notice.text, sizeof(notice.text), "%s", text);
+    m_net.broadcast(&notice, sizeof(notice), /*reliable=*/true);
 }
 
 } // namespace fl

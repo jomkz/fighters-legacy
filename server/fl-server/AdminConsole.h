@@ -33,6 +33,11 @@ struct ServerCommandContext {
     std::chrono::steady_clock::time_point startTime{};
     volatile sig_atomic_t* quitFlag{nullptr}; // quit command sets this to 1
 
+    // Shutdown command configuration (from ServerConfig [shutdown] section).
+    uint32_t shutdownWarningIntervalS{300}; // default 5 min between countdown notices
+    uint32_t minShutdownDelayS{0};          // 0 = no minimum enforced
+    bool shutdownRequireConfirm{true};      // require --force flag to schedule/trigger shutdown
+
     // Ban/allowlist file persistence. Null = no file configured.
     std::string* banlistPath{nullptr};
     std::string* allowlistPath{nullptr};

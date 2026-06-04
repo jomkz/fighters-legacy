@@ -102,12 +102,40 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Configure rate limiting; call before gameLoop.start().
     void setRateLimitParams(int maxConnects, int windowSeconds, int floodMultiplier);
 
-    // Override the clock used for rate limiting (for testing only).
+    // Override the clock used for rate limiting and shutdown timing (for testing only).
     void setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn);
+
+    // Shutdown countdown — all must be called from the sim thread (via enqueueSimCallback),
+    // except setShutdownCallback which must be called before gameLoop.start().
+
+    // Schedule a graceful shutdown. Broadcasts a MsgServerNotice at initiateShutdown time and
+    // every warningIntervalS seconds thereafter; at T=0 sends a final notice and invokes the
+    // shutdown callback. warningIntervalS == 0 skips intermediate notices (fires only at T=0).
+    void initiateShutdown(uint32_t secondsDelay, uint32_t warningIntervalS);
+
+    // Cancel a pending shutdown (no-op if none active).
+    void cancelShutdown();
+
+    // Push the scheduled shutdown back by additionalSeconds. Returns false if no shutdown is
+    // active (no-op). On success resets the notice timer so clients see an immediate update.
+    bool extendShutdown(uint32_t additionalSeconds);
+
+    // Returns true if a shutdown is currently counting down (sim-thread-only read).
+    bool isShuttingDown() const noexcept {
+        return m_shuttingDown;
+    }
+
+    // Seconds until the scheduled shutdown; 0 if none active (sim-thread-only read).
+    uint32_t secondsUntilShutdown() const noexcept;
+
+    // Register a callback invoked on the sim thread at T=0. Call before gameLoop.start().
+    void setShutdownCallback(std::function<void()> fn);
 
   private:
     void sendConnectAck(uint32_t peerId, EntityId assigned);
     void stepFlightSim(FlightIntegrator& fi, EntityState& state, const PeerInputState& inp, double simDt);
+    void broadcastShutdownNotice(uint16_t secsLeft, const char* text);
+    static std::string makeShutdownMessage(uint32_t secsLeft);
 
     EntityManager& m_entityManager;
     EntityTypeRegistry& m_registry;
@@ -146,6 +174,13 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
     // Injectable clock for testing; defaults to steady_clock::now.
     std::function<std::chrono::steady_clock::time_point()> m_now{std::chrono::steady_clock::now};
+
+    // Shutdown countdown state (sim-thread only).
+    bool m_shuttingDown{false};
+    std::chrono::steady_clock::time_point m_shutdownAt{};
+    std::chrono::steady_clock::time_point m_nextNoticeAt{};
+    uint32_t m_warningIntervalS{300};
+    std::function<void()> m_shutdownCallback;
 };
 
 } // namespace fl

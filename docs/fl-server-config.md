@@ -401,6 +401,35 @@ Aggregate ENet host bandwidth caps in bytes per second. `0` = unlimited (ENet de
 
 ---
 
+## [shutdown] — Graceful shutdown settings
+
+```toml
+[shutdown]
+warning_interval_s  = 300   # seconds between countdown broadcast notices (default 5 min)
+min_shutdown_delay_s = 0    # minimum seconds of warning required; 0 = no minimum
+require_confirm      = true # require --force flag before scheduling; set false to skip prompt
+```
+
+### `warning_interval_s`
+
+How often (in seconds) the server broadcasts a countdown notice to connected clients during a
+shutdown sequence. Valid range: `[1, 86400]`. Default: `300` (5 minutes).
+
+### `min_shutdown_delay_s`
+
+Minimum allowed delay (in seconds) when scheduling a shutdown via `shutdown --in <dur>`. The
+`shutdown --now` command bypasses this minimum. Valid range: `[0, 86400]`. Default: `0`.
+
+### `require_confirm`
+
+When `true` (default), the `shutdown --in` and `shutdown --now` commands require a `--force` flag
+to proceed; without it, the server prints a preview and asks the operator to re-run with `--force`.
+Set to `false` on automated/scripted environments where the confirmation prompt is unwanted.
+
+All `[shutdown]` fields take effect immediately — no restart required.
+
+---
+
 ## Runtime administration (stdin console)
 
 `fl-server` accepts admin commands on standard input. No extra port or network
@@ -435,7 +464,8 @@ process.
 | `reload_config` | — | Re-read `server.toml` and apply: `name` (reflected in next LAN beacon broadcast), `motd` |
 | `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
 | `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |
-| `quit` | — | Gracefully shut down fl-server |
+| `shutdown` | `[--in <dur>] [--delay <dur>] [--cancel] [--now] [--force]` | Schedule or cancel a graceful shutdown with countdown notices to connected clients; `--now` exits immediately after notifying clients; `--force` required when `shutdown.require_confirm = true` (default) |
+| `quit` | — | Gracefully shut down fl-server immediately without client notification |
 
 ### Hot-reload behaviour (`reload_config`)
 
