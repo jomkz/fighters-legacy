@@ -18,6 +18,8 @@ sudo dnf install cmake ninja-build gcc g++ clang clang-tools-extra \
 
 For Bluetooth gamepad support (Xbox controllers), see [docs/linux-gamepad.md](linux-gamepad.md).
 
+> **Note:** `SDL3-devel` and `openal-soft-devel` are optional. CMake automatically fetches and statically compiles both when they are absent — this is what CI and release builds do. Installing them speeds up local dev builds but means your dev binary will dynamically link those libraries, unlike the self-contained CI and release artifacts.
+
 > **Note (OpenAL):** Some Fedora installs ship `/etc/openal/alsoft.conf` with `drivers = null`, which silently discards all audio. If `audio_check` reports success but you hear nothing, override it: `printf '[general]\ndrivers = pipewire\n' > ~/.config/alsoft.conf`
 
 ### Linux — Ubuntu/Debian
@@ -31,7 +33,7 @@ sudo apt-get install -y cmake ninja-build gcc g++ clang clang-format \
 
 `glslang-tools` provides `glslangValidator` for Vulkan shader compilation. `vulkan-validationlayers` provides `VK_LAYER_KHRONOS_validation` for debug builds.
 
-> **Note:** SDL3 and OpenAL Soft may need building from source on older distros if the packaged versions are below the required minimum. Check `cmake/dependencies.cmake` (added in Phase 1) for version requirements.
+> **Note:** `libsdl3-dev` and `libopenal-dev` are optional. CMake automatically fetches and statically compiles both when they are absent — this is what CI and release builds do. Installing them speeds up local dev builds but means your dev binary will dynamically link those libraries, unlike the self-contained CI and release artifacts.
 
 ### Windows (MSVC 2022)
 
@@ -268,14 +270,14 @@ The `game/` directory holds game binary entry points. The `server/` directory ho
 | CMake | 3.25+ | System / installer |
 | Vulkan SDK | 1.3+ | LunarG |
 | MoltenVK | bundled with Vulkan SDK | LunarG (macOS) |
-| SDL3 | latest | FetchContent or system |
-| OpenAL Soft | 1.24+ | FetchContent or system |
+| SDL3 | latest | FetchContent (static) or system (shared, optional) |
+| OpenAL Soft | 1.24+ | FetchContent (static) or system (shared, optional) |
 | enet6 | v6.1.3 (SirLynix/enet6) | FetchContent |
 | Catch2 | 3.x | FetchContent |
 | tomlplusplus | 3.4+ | FetchContent or system |
 | GLM | 1.0+ | FetchContent or system |
 | VulkanMemoryAllocator | 3.3+ | FetchContent (Vulkan builds only) |
-| KTX-Software | 4.4+ | FetchContent (Vulkan builds only) |
+| KTX-Software | 4.4+ | FetchContent, always static (Vulkan builds only) |
 | tinygltf | 2.9+ | FetchContent or system |
 | yaml-cpp | 0.8+ | FetchContent or system |
 

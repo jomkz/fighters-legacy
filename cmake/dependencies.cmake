@@ -22,6 +22,10 @@ if(SDL3_FOUND)
     message(STATUS "SDL3: system (${SDL3_VERSION})")
 else()
     message(STATUS "SDL3: FetchContent (will fetch when renderer backend is configured)")
+    # Force static library so release binaries are self-contained (no SDL3.dll / libSDL3.so).
+    # These are SDL3-specific cache vars; they don't affect any other FetchContent dep.
+    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+    set(SDL_STATIC ON  CACHE BOOL "" FORCE)
     FetchContent_Declare(SDL3
         GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
         GIT_TAG        release-3.2.10
@@ -44,8 +48,9 @@ if(OPENAL_FOUND OR OpenAL_FOUND)
     message(STATUS "OpenAL Soft: system")
 else()
     message(STATUS "OpenAL Soft: FetchContent (will fetch when audio backend is configured)")
-    set(ALSOFT_UTILS    OFF CACHE BOOL "" FORCE)
-    set(ALSOFT_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(ALSOFT_UTILS           OFF CACHE BOOL "" FORCE)
+    set(ALSOFT_EXAMPLES        OFF CACHE BOOL "" FORCE)
+    set(ALSOFT_BUILD_IMPORT_LIB OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(openal-soft
         GIT_REPOSITORY https://github.com/kcat/openal-soft.git
         GIT_TAG        1.24.2
@@ -197,9 +202,17 @@ if(Vulkan_FOUND)
         # object library targets build cleanly; then also add -w to the final
         # library targets to silence warning noise in the build output.
         set(_fl_save_werror "${CMAKE_COMPILE_WARNING_AS_ERROR}")
+        # KTX_FEATURE_STATIC_LIBRARY=ON (above) controls supplemental static targets;
+        # BUILD_SHARED_LIBS is what actually sets LIB_TYPE in KTX's CMakeLists.
+        set(_fl_ktx_save_bsl "${BUILD_SHARED_LIBS}")
         set(CMAKE_COMPILE_WARNING_AS_ERROR OFF)
+        set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
         FetchContent_MakeAvailable(ktx)
         set(CMAKE_COMPILE_WARNING_AS_ERROR "${_fl_save_werror}")
+        unset(BUILD_SHARED_LIBS CACHE)
+        if(_fl_ktx_save_bsl)
+            set(BUILD_SHARED_LIBS "${_fl_ktx_save_bsl}")
+        endif()
         # Suppress warnings from the compiled ktx_read target (it inherits -Werror
         # from the outer project otherwise).
         foreach(_ktx_target IN ITEMS ktx_read ktx)
