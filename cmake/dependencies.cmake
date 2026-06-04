@@ -50,7 +50,6 @@ else()
     message(STATUS "OpenAL Soft: FetchContent (will fetch when audio backend is configured)")
     set(ALSOFT_UTILS           OFF CACHE BOOL "" FORCE)
     set(ALSOFT_EXAMPLES        OFF CACHE BOOL "" FORCE)
-    # Prevent Windows import-lib (.lib) generation alongside the static build.
     set(ALSOFT_BUILD_IMPORT_LIB OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(openal-soft
         GIT_REPOSITORY https://github.com/kcat/openal-soft.git
