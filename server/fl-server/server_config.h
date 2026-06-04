@@ -43,6 +43,11 @@ struct ServerConfig {
     bool discoveryEnabled = true;
     int discoveryIntervalMs = 2000;
 
+    // [shutdown]
+    int shutdownWarningIntervalS = 300; // seconds between countdown broadcast notices (default 5 min)
+    int minShutdownDelayS = 0;          // minimum seconds of warning required; 0 = no minimum
+    bool shutdownRequireConfirm = true; // require --force flag before scheduling shutdown
+
     // [security]
     int connectRateLimitCount = 5;     // max connections per IP within the window
     int connectRateLimitWindowS = 10;  // sliding window size, seconds

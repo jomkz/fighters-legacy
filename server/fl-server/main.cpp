@@ -598,6 +598,13 @@ int main(int argc, char** argv) {
     adminCtx.saveBanlist = [&](const std::unordered_set<std::string>& b) { saveIpListFile(cfg.banlistPath, b, log); };
     adminCtx.loadBanlist = [&]() { return loadIpListFile(cfg.banlistPath, log); };
     adminCtx.loadAllowlist = [&]() { return loadIpListFile(cfg.allowlistPath, log); };
+    adminCtx.shutdownWarningIntervalS = static_cast<uint32_t>(cfg.shutdownWarningIntervalS);
+    adminCtx.minShutdownDelayS = static_cast<uint32_t>(cfg.minShutdownDelayS);
+    adminCtx.shutdownRequireConfirm = cfg.shutdownRequireConfirm;
+
+    // T=0 shutdown callback: set the quit flag from the sim thread.
+    broadcaster.setShutdownCallback([&]() { g_quit = 1; });
+
     registerServerCommands(adminRegistry, adminCtx);
 
     // Main thread sleeps until SIGINT/SIGTERM. All ENet I/O is driven from the

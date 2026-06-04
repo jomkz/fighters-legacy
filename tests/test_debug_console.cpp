@@ -225,6 +225,27 @@ TEST_CASE("DebugConsole tick with no key press returns false", "[dbg][console]")
 // DebugConsole
 // ============================================================================
 
+TEST_CASE("DebugConsole print appends text to output ring", "[dbg][console]") {
+    NullLogger logger;
+    DebugCommandRegistry reg;
+    DebugConsole con(logger, reg);
+
+    con.print("hello from server");
+
+    con.openHeadless();
+    glm::dvec3 pos{};
+    con.buildHud(&pos);
+
+    bool found = false;
+    for (const auto& el : con.elements()) {
+        if (el.type == HudElement::Type::Text && el.text.find("hello from server") != std::string_view::npos) {
+            found = true;
+            break;
+        }
+    }
+    CHECK(found);
+}
+
 TEST_CASE("DebugConsole output ring wrapping", "[dbg][console]") {
     NullLogger logger;
     DebugCommandRegistry reg;

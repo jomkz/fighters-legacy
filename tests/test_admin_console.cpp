@@ -194,3 +194,79 @@ TEST_CASE("AdminConsole: unban with null broadcaster returns not available", "[a
     std::string out = reg.dispatch("unban 1.2.3.4");
     CHECK(out.find("not available") != std::string::npos);
 }
+
+// ---------------------------------------------------------------------------
+// shutdown command
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AdminConsole: shutdown with null broadcaster returns not available", "[admin_console][shutdown]") {
+    auto reg = makeRegistry(); // broadcaster == nullptr
+    std::string out = reg.dispatch("shutdown --in 30m --force");
+    CHECK(out.find("not available") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: shutdown --in with null gameLoop returns not available", "[admin_console][shutdown]") {
+    ServerCommandContext ctx;
+    // broadcaster non-null but gameLoop == nullptr — use a sentinel address
+    static int sentinel;
+    ctx.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
+    ctx.gameLoop = nullptr;
+    auto reg = makeRegistry(ctx);
+    std::string out = reg.dispatch("shutdown --in 30m --force");
+    CHECK(out.find("not available") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: shutdown --in with invalid duration returns error", "[admin_console][shutdown]") {
+    ServerCommandContext ctx;
+    static int sentinel;
+    ctx.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
+    ctx.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
+    auto reg = makeRegistry(ctx);
+    std::string out = reg.dispatch("shutdown --in notaduration --force");
+    CHECK(out.find("invalid") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: shutdown --in without --force returns confirmation prompt", "[admin_console][shutdown]") {
+    ServerCommandContext ctx;
+    static int sentinel;
+    ctx.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
+    ctx.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
+    ctx.shutdownRequireConfirm = true;
+    auto reg = makeRegistry(ctx);
+    std::string out = reg.dispatch("shutdown --in 30m");
+    // Should prompt to re-run with --force, not schedule anything
+    CHECK(out.find("--force") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: shutdown --now without --force returns confirmation prompt", "[admin_console][shutdown]") {
+    ServerCommandContext ctx;
+    static int sentinel;
+    ctx.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
+    ctx.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
+    ctx.shutdownRequireConfirm = true;
+    auto reg = makeRegistry(ctx);
+    std::string out = reg.dispatch("shutdown --now");
+    CHECK(out.find("--force") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: shutdown --cancel with null broadcaster returns not available", "[admin_console][shutdown]") {
+    auto reg = makeRegistry();
+    std::string out = reg.dispatch("shutdown --cancel");
+    CHECK(out.find("not available") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: shutdown --delay with null broadcaster returns not available", "[admin_console][shutdown]") {
+    auto reg = makeRegistry();
+    std::string out = reg.dispatch("shutdown --delay 5m");
+    CHECK(out.find("not available") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: shutdown unknown flag returns error", "[admin_console][shutdown]") {
+    ServerCommandContext ctx;
+    static int sentinel;
+    ctx.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
+    ctx.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
+    auto reg = makeRegistry(ctx);
+    std::string out = reg.dispatch("shutdown --bogus");
+    CHECK(out.find("unknown flag") != std::string::npos);
+}

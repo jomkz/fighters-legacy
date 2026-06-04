@@ -69,10 +69,16 @@ struct ClientNetEventHandler : INetworkEventHandler {
     fl::EntityTypeRegistry& registry;
     ILogger& logger;
     INetwork& net;
-    EnvironmentState& env; // updated when MsgWeatherState is received
+    EnvironmentState& env;          // updated when MsgWeatherState is received
+    DebugConsole* console{nullptr}; // optional; server notices are printed here when set
 
     uint32_t assignedEntityIdx{0};
     uint32_t assignedEntityGen{0};
+
+    // Server-notice HUD state (populated by MsgServerNotice).
+    char noticeBuf[72]{}; // stable UTF-8 backing for HudElement::text; "[server] " (9) + text (60) + NUL
+    uint16_t noticeSecsLeft{0};
+    bool hasNotice{false};
 
     ClientNetEventHandler(fl::SimRenderBridge& b, fl::EntityTypeRegistry& r, ILogger& l, INetwork& n,
                           EnvironmentState& e)
@@ -168,6 +174,17 @@ struct ClientNetEventHandler : INetworkEventHandler {
             env.fogStartDist = ws.fogStartDist;
             env.timeOfDay = tod;
             fl::WeatherController::applyPresetToEnv(static_cast<fl::WeatherPreset>(ws.preset), tod, env);
+        } else if (msgId == static_cast<uint8_t>(fl::MsgId::ServerNotice)) {
+            if (size < sizeof(fl::MsgServerNotice))
+                return;
+            fl::MsgServerNotice sn;
+            std::memcpy(&sn, data, sizeof(sn));
+            sn.text[59] = '\0';
+            noticeSecsLeft = sn.secondsRemaining;
+            hasNotice = true;
+            std::snprintf(noticeBuf, sizeof(noticeBuf), "[server] %s", sn.text);
+            if (console)
+                console->print(std::string(noticeBuf));
         }
         // Unknown msgIds: silently discard
     }
@@ -543,6 +560,7 @@ int main(int argc, char** argv) {
     registerBuiltinCommands(dbgRegistry, {&entityManager, &entityRegistry, &renderBridge,
                                           &clientHandler.assignedEntityIdx, &clientHandler.assignedEntityGen,
                                           &dbgConsole.showPosRef(), &serverLoop, &weatherController});
+    clientHandler.console = &dbgConsole;
 
     bool running = true;
     while (running && !p.window->shouldClose()) {
@@ -815,6 +833,22 @@ int main(int argc, char** argv) {
             auto dbgElems = dbgConsole.elements();
             std::vector<HudElement> allHud(flightElems.begin(), flightElems.end());
             allHud.insert(allHud.end(), dbgElems.begin(), dbgElems.end());
+
+            // Server-notice banner: yellow text top-center when a notice is active.
+            if (clientHandler.hasNotice) {
+                HudElement el;
+                el.type = HudElement::Type::Text;
+                el.x = 0.5f;
+                el.y = 0.02f;
+                el.r = 1.f;
+                el.g = 0.9f;
+                el.b = 0.1f;
+                el.a = 1.f;
+                el.scale = 1.f;
+                el.text = clientHandler.noticeBuf; // backed by clientHandler member — stable
+                allHud.push_back(el);
+            }
+
             p.renderer->submitHudElements(allHud);
         }
 

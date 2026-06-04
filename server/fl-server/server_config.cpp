@@ -190,6 +190,24 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
             }
         }
 
+        // [shutdown]
+        if (auto v = tbl["shutdown"]["warning_interval_s"].value<int64_t>()) {
+            if (*v < 1 || *v > 86400)
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "shutdown.warning_interval_s out of range [1,86400]; using default");
+            else
+                cfg.shutdownWarningIntervalS = static_cast<int>(*v);
+        }
+        if (auto v = tbl["shutdown"]["min_shutdown_delay_s"].value<int64_t>()) {
+            if (*v < 0 || *v > 86400)
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "shutdown.min_shutdown_delay_s out of range [0,86400]; using default");
+            else
+                cfg.minShutdownDelayS = static_cast<int>(*v);
+        }
+        if (auto v = tbl["shutdown"]["require_confirm"].value<bool>())
+            cfg.shutdownRequireConfirm = *v;
+
     } catch (const toml::parse_error& e) {
         char buf[256];
         std::snprintf(buf, sizeof(buf), "failed to parse config: %s -- using defaults", e.what());
