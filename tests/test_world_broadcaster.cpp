@@ -1133,6 +1133,142 @@ TEST_CASE("WorldBroadcaster: banned IP rejected even if on allowlist", "[world_b
 }
 
 // ---------------------------------------------------------------------------
+// Security: per-IP concurrent connection limit
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: per-IP limit of zero allows unlimited connections", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    // limit=0 = unlimited; connect three peers from the same IP
+
+    net.peerAddresses[0] = "1.2.3.4:1001";
+    net.peerAddresses[1] = "1.2.3.4:1002";
+    net.peerAddresses[2] = "1.2.3.4:1003";
+    broadcaster.onConnect(0u);
+    broadcaster.onConnect(1u);
+    broadcaster.onConnect(2u);
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: per-IP limit allows last connection at limit", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setMaxConnectionsPerIp(2);
+
+    net.peerAddresses[0] = "1.2.3.4:1001";
+    net.peerAddresses[1] = "1.2.3.4:1002";
+    broadcaster.onConnect(0u);
+    net.disconnectedPeers.clear();
+    net.sends.clear();
+    broadcaster.onConnect(1u); // count was 1, limit is 2 — allowed
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: per-IP limit rejects connection over limit", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setMaxConnectionsPerIp(2);
+
+    net.peerAddresses[0] = "1.2.3.4:1001";
+    net.peerAddresses[1] = "1.2.3.4:1002";
+    net.peerAddresses[2] = "1.2.3.4:1003";
+    broadcaster.onConnect(0u);
+    broadcaster.onConnect(1u);
+    net.disconnectedPeers.clear();
+    net.sends.clear();
+    broadcaster.onConnect(2u); // count is 2, limit is 2 — rejected
+    REQUIRE(net.disconnectedPeers.size() == 1u);
+    CHECK(net.disconnectedPeers[0] == 2u);
+    CHECK(net.sends.empty());
+}
+
+TEST_CASE("WorldBroadcaster: per-IP limit counts only matching-IP peers", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setMaxConnectionsPerIp(2);
+
+    net.peerAddresses[0] = "1.2.3.4:1001";
+    net.peerAddresses[1] = "1.2.3.4:1002";
+    net.peerAddresses[2] = "5.5.5.5:1001";
+    net.peerAddresses[3] = "5.5.5.5:1002";
+    broadcaster.onConnect(0u);
+    broadcaster.onConnect(1u);
+    broadcaster.onConnect(2u);
+    broadcaster.onConnect(3u);
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: null getPeerAddress does not crash per-IP limit check", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setMaxConnectionsPerIp(1);
+
+    // peer 0 has no address entry → getPeerAddress returns nullptr
+    broadcaster.onConnect(0u);
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: per-IP limit slot freed after disconnect allows reconnect",
+          "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setMaxConnectionsPerIp(1);
+
+    net.peerAddresses[0] = "1.2.3.4:1001";
+    net.peerAddresses[1] = "1.2.3.4:1002";
+    broadcaster.onConnect(0u);
+    broadcaster.onDisconnect(0u); // frees the slot
+    net.disconnectedPeers.clear();
+    net.sends.clear();
+    broadcaster.onConnect(1u); // count is now 0 — should be allowed
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: per-IP limit counts IPv4-mapped IPv6 as same address", "[world_broadcaster][security]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setMaxConnectionsPerIp(1);
+
+    net.peerAddresses[0] = "1.2.3.4:1001";
+    net.peerAddresses[1] = "[::ffff:1.2.3.4]:1002"; // IPv4-mapped IPv6 — same host
+    broadcaster.onConnect(0u);
+    net.disconnectedPeers.clear();
+    net.sends.clear();
+    broadcaster.onConnect(1u); // normalizeIp maps ::ffff:1.2.3.4 → 1.2.3.4 → rejected
+    REQUIRE(net.disconnectedPeers.size() == 1u);
+    CHECK(net.disconnectedPeers[0] == 1u);
+    CHECK(net.sends.empty());
+}
+
+// ---------------------------------------------------------------------------
 // Security: flood detection
 // ---------------------------------------------------------------------------
 

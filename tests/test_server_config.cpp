@@ -43,6 +43,7 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.operatorPassword.empty());
     CHECK(cfg.preHandshakeRateLimitCount == 20);
     CHECK(cfg.preHandshakeWindowMs == 1000);
+    CHECK(cfg.maxConnectionsPerIp == 0);
     CHECK(log.entries.empty());
 }
 
@@ -533,6 +534,37 @@ TEST_CASE("parseServerConfig: pre_handshake_window_ms out of range warns and use
         MockLogger log;
         auto cfg = parseServerConfig("[security]\npre_handshake_window_ms = 90000\n", &log);
         CHECK(cfg.preHandshakeWindowMs == 1000);
+        CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
+    }
+}
+
+TEST_CASE("parseServerConfig: reads security.max_connections_per_ip", "[server_config][security]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[security]\nmax_connections_per_ip = 4\n", &log);
+    CHECK(cfg.maxConnectionsPerIp == 4);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: max_connections_per_ip of zero is accepted without warning",
+          "[server_config][security]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[security]\nmax_connections_per_ip = 0\n", &log);
+    CHECK(cfg.maxConnectionsPerIp == 0);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: max_connections_per_ip out of range warns and uses default",
+          "[server_config][security]") {
+    {
+        MockLogger log;
+        auto cfg = parseServerConfig("[security]\nmax_connections_per_ip = -1\n", &log);
+        CHECK(cfg.maxConnectionsPerIp == 0);
+        CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
+    }
+    {
+        MockLogger log;
+        auto cfg = parseServerConfig("[security]\nmax_connections_per_ip = 129\n", &log);
+        CHECK(cfg.maxConnectionsPerIp == 0);
         CHECK(log.hasMessage(LogLevel::Warn, "out of range"));
     }
 }

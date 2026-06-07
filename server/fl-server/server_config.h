@@ -59,6 +59,7 @@ struct ServerConfig {
     std::string operatorPassword; // empty = network admin commands disabled; overridden by --admin-token at runtime
     int preHandshakeRateLimitCount = 20; // max CONNECT attempts per IP per window; 0 = disabled
     int preHandshakeWindowMs = 1000;     // sliding window in milliseconds
+    int maxConnectionsPerIp = 0;         // max simultaneous connections per IP; 0 = unlimited
 };
 
 // Returns the embedded default server.toml content written on first run.

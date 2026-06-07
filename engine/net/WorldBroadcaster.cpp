@@ -104,6 +104,10 @@ void WorldBroadcaster::setRateLimitParams(int maxConnects, int windowSeconds, in
     m_floodMultiplier = floodMultiplier;
 }
 
+void WorldBroadcaster::setMaxConnectionsPerIp(int max) noexcept {
+    m_maxConnectionsPerIp = max;
+}
+
 void WorldBroadcaster::setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn) {
     m_now = std::move(fn);
 }
@@ -291,6 +295,22 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         if (static_cast<int>(rec.timestamps.size()) > m_connectRateLimit) {
             char msg[128];
             std::snprintf(msg, sizeof(msg), "peer %u from %s rate-limited — disconnecting", peerId, ip.c_str());
+            m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
+            m_net.disconnectPeer(peerId);
+            return;
+        }
+    }
+
+    // Per-IP concurrent connection limit.
+    if (m_maxConnectionsPerIp > 0 && !ip.empty()) {
+        int count = 0;
+        for (const auto& [pid, eid] : m_peerEntities)
+            if (extractIp(m_net.getPeerAddress(pid)) == ip)
+                ++count;
+        if (count >= m_maxConnectionsPerIp) {
+            char msg[128];
+            std::snprintf(msg, sizeof(msg), "peer %u from %s exceeds per-IP connection limit (%d) -- disconnecting",
+                          peerId, ip.c_str(), m_maxConnectionsPerIp);
             m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
             m_net.disconnectPeer(peerId);
             return;

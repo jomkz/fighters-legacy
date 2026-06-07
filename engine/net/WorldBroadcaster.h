@@ -102,6 +102,9 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Configure rate limiting; call before gameLoop.start().
     void setRateLimitParams(int maxConnects, int windowSeconds, int floodMultiplier);
 
+    // Maximum simultaneous connections from one IP; 0 = unlimited. Call before gameLoop.start().
+    void setMaxConnectionsPerIp(int max) noexcept;
+
     // Override the clock used for rate limiting and shutdown timing (for testing only).
     void setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn);
 
@@ -169,7 +172,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     std::unordered_map<std::string, ConnectRecord> m_connectRecords;
     int m_connectRateLimit{5};
     int m_connectRateWindowS{10};
-    uint64_t m_ratePruneTick{0}; // coarse prune cadence counter (every 600 ticks)
+    int m_maxConnectionsPerIp{0}; // 0 = unlimited
+    uint64_t m_ratePruneTick{0};  // coarse prune cadence counter (every 600 ticks)
 
     // Per-peer packet flood detector (sim-thread only).
     struct PeerFloodState {
