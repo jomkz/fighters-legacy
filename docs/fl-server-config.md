@@ -413,6 +413,20 @@ probing (post-handshake).
 Sliding window size in milliseconds for `pre_handshake_rate_limit_count`. Out-of-range
 values are rejected with a warning and the default is kept.
 
+### `max_connections_per_ip`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `0` (unlimited) | 0–128 |
+
+Maximum number of simultaneous connections allowed from a single IP address. When non-zero,
+`onConnect` counts the number of currently-connected peers from the same IP and disconnects
+immediately if the count would reach or exceed the limit.
+
+Set to `0` (default) to disable this check. This is distinct from `connect_rate_limit_count`,
+which limits connection *attempts* per time window; `max_connections_per_ip` limits *held*
+connections. Both can be active simultaneously.
+
 ### `banlist_path`
 
 | Type | Default |
@@ -550,7 +564,8 @@ process.
 Fields that **require a restart** to take effect: `port`, `bind_address`, `max_peers`,
 `game_modes`, `password`, `discovery.*`, `mods.stack`, `rotation.*`, `world.*`, `ai.*`,
 `security.connect_rate_limit_*`, `security.packet_flood_multiplier`, `security.*_bandwidth_bps`,
-`security.pre_handshake_rate_limit_count`, `security.pre_handshake_window_ms`.
+`security.pre_handshake_rate_limit_count`, `security.pre_handshake_window_ms`,
+`security.max_connections_per_ip`.
 
 ### Access control
 

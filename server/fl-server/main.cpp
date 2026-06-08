@@ -335,6 +335,7 @@ int main(int argc, char** argv) {
     fl::WeatherController weatherController(wparams);
     fl::WorldBroadcaster broadcaster(entityManager, entityRegistry, *net, *log, &weatherController);
     broadcaster.setRateLimitParams(cfg.connectRateLimitCount, cfg.connectRateLimitWindowS, cfg.packetFloodMultiplier);
+    broadcaster.setMaxConnectionsPerIp(cfg.maxConnectionsPerIp);
     if (!cfg.banlistPath.empty()) {
         auto banned = loadIpListFile(cfg.banlistPath, log);
         char buf[128];

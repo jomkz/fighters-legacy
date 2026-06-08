@@ -83,6 +83,10 @@ static const char* kDefaultToml =
     "pre_handshake_rate_limit_count = 20\n"
     "pre_handshake_window_ms = 1000\n"
     "\n"
+    "# Maximum simultaneous connections from a single IP address. 0 = unlimited (default).\n"
+    "# Range [0, 128]. Applies post-handshake, after the rate-limit check.\n"
+    "max_connections_per_ip = 0\n"
+    "\n"
     "[shutdown]\n"
     "shutdown_warning_interval_s = 300\n"
     "min_shutdown_delay_s = 0\n"
@@ -293,6 +297,14 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                          "security.pre_handshake_window_ms out of range [100,60000]; using default");
             } else {
                 cfg.preHandshakeWindowMs = static_cast<int>(*v);
+            }
+        }
+        if (auto v = tbl["security"]["max_connections_per_ip"].value<int64_t>()) {
+            if (*v < 0 || *v > 128) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "security.max_connections_per_ip out of range [0,128]; using default");
+            } else {
+                cfg.maxConnectionsPerIp = static_cast<int>(*v);
             }
         }
 
