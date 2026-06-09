@@ -30,6 +30,7 @@ else()
         GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
         GIT_TAG        release-3.4.10
         GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
         SYSTEM
     )
 endif()
@@ -55,6 +56,7 @@ else()
         GIT_REPOSITORY https://github.com/kcat/openal-soft.git
         GIT_TAG        1.24.2
         GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
         SYSTEM
     )
 endif()
@@ -68,6 +70,7 @@ FetchContent_Declare(enet6
     GIT_REPOSITORY https://github.com/SirLynix/enet6.git
     GIT_TAG        v6.1.3
     GIT_SHALLOW    TRUE
+    GIT_PROGRESS   TRUE
     SYSTEM
 )
 
@@ -83,6 +86,7 @@ else()
         GIT_REPOSITORY https://github.com/catchorg/Catch2.git
         GIT_TAG        v3.15.0
         GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
         SYSTEM
     )
     FetchContent_MakeAvailable(Catch2)
@@ -110,6 +114,7 @@ else()
         GIT_REPOSITORY https://github.com/syoyo/tinygltf.git
         GIT_TAG        v3.0.0
         GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
         SYSTEM
     )
     FetchContent_MakeAvailable(tinygltf)
@@ -138,6 +143,7 @@ else()
         GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
         GIT_TAG        yaml-cpp-0.9.0
         GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
         SYSTEM
     )
     FetchContent_MakeAvailable(yaml-cpp)
@@ -168,6 +174,7 @@ if(Vulkan_FOUND)
             GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
             GIT_TAG        v3.4.0
             GIT_SHALLOW    TRUE
+            GIT_PROGRESS   TRUE
             SYSTEM
         )
         FetchContent_MakeAvailable(VulkanMemoryAllocator)
@@ -194,6 +201,7 @@ if(Vulkan_FOUND)
             GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
             GIT_TAG        v4.4.2
             GIT_SHALLOW    TRUE
+            GIT_PROGRESS   TRUE
             SYSTEM
         )
         # KTX-Software has many pedantic issues in its internals (anonymous structs,
@@ -244,6 +252,7 @@ else()
         GIT_REPOSITORY https://github.com/g-truc/glm.git
         GIT_TAG        1.0.3
         GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
         SYSTEM
     )
     FetchContent_MakeAvailable(glm)
@@ -258,6 +267,7 @@ FetchContent_Declare(stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
     GIT_TAG        31c1ad37456438565541f4919958214b6e762fb4
     GIT_SHALLOW    FALSE
+    GIT_PROGRESS   TRUE
     SYSTEM
 )
 FetchContent_GetProperties(stb)
@@ -284,6 +294,7 @@ else()
         GIT_REPOSITORY https://github.com/lua/lua.git
         GIT_TAG        v5.5.0
         GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
         SYSTEM
     )
     FetchContent_GetProperties(lua_src)
@@ -323,6 +334,7 @@ else()
         GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
         GIT_TAG        v3.4.0
         GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
         SYSTEM
     )
     FetchContent_MakeAvailable(tomlplusplus)
