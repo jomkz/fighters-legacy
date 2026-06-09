@@ -19,11 +19,9 @@ jobs:
           submodules: recursive
 
       - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build cmake gcc g++ \
-            libx11-dev libxext-dev libxcursor-dev libxi-dev libxrandr-dev \
-            libxss-dev libxfixes-dev libxrender-dev libxinerama-dev libxxf86vm-dev libxkbcommon-dev libxtst-dev
+        uses: ./.github/actions/install-linux-deps
+        with:
+          gcc: 'true'
 
       - name: Configure
         run: cmake --preset debug
