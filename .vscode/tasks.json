@@ -185,7 +185,7 @@
       "dependsOn": [
         "CI: clang-format check",
         "CI: REUSE lint",
-        "Test (Debug)",
+        "Build (Debug)",
         "CI: Smoke tests",
         "CI: pytest (gen_terrain_chunks)",
         "CI: Locale lint",
