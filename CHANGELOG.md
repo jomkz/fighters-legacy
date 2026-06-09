@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **game**: Wire haptic feedback for flight-sim events via `HapticController`; covers gun burst, hit taken, stall buffet, afterburner ignition/sustain, engine failure, G-LOC onset, transonic buffet, GPWS double-pulse, and gear touchdown; stub entry points provided for missile launch, missile warning, compressor stall, carrier trap, hydraulic failure, and ordnance release (#127)
 - **audio**: Tracks in `shuffle = true` playlist states are now randomised on state entry using Fisher-Yates; the shuffled order is preserved for the full cycle and re-shuffled on each loop (closes #168)
 
 ### Fixed
