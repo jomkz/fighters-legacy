@@ -90,7 +90,7 @@ void CameraInput::update(fl::CameraController& ctrl, const fl::EntityRenderEntry
             if (keys[SDL_SCANCODE_Q])
                 m_sbPivot.y -= speed;
             if (keys[SDL_SCANCODE_R]) {
-                m_sbPivot = {0.0, 2000.0, 0.0};
+                m_sbPivot = player ? player->position : glm::dvec3{0.0, 2000.0, 0.0};
                 m_sbYaw = 0.f;
                 m_sbPitch = 30.f;
                 m_sbRadius = 30.f;

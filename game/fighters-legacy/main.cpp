@@ -691,7 +691,7 @@ int main(int argc, char** argv) {
                 playerPos = playerEntry->position;
                 playerPosPtr = &playerPos;
             }
-            dbgConsole.buildHud(playerPosPtr);
+            dbgConsole.buildHud(&cam.worldOrigin, playerPosPtr);
         }
 
         // F3 performance overlay.

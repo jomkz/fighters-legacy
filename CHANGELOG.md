@@ -13,6 +13,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **game**: Cockpit camera (F1) now rolls the horizon correctly when the aircraft banks; the `up` vector in `CameraController` was hardcoded to world +Y, so aileron roll had no visual effect — it now tracks the entity's body +Y direction in world space
+- **flight**: Elevator input no longer causes the entity to spin out of control; `iyy_kg_m2` increased from 800 to 8 000, `cm_de` reduced from −3 to −0.5, and `cm_q` reduced from −25 to −8 in `BuiltinFlightModel` — the previous values violated the semi-implicit Euler stability criterion and caused pitch-rate divergence within a single tick at any flight speed
+- **flight**: Entities no longer fall through terrain; `FlightIntegrator::step` accepts a `groundElev` floor and applies a bounce response (CoR 0.35) or stops at low impact speed; `WorldBroadcaster` tracks the entity's world-XZ atomically so the fl-server admin loop can call `terrainStreamer.heightAt` at the entity's actual position and update `setGroundElevation` each 50 ms tick — the terrain streamer also follows the entity so LOD-0 chunks stay loaded at the flight location; AGL no longer goes negative because the physics floor now matches the terrain under the entity
+- **game**: Camera world position (`CAM x y z`) is now always displayed in the top-right corner in all camera modes; `toggle_pos` adds a second `ENT x y z` line below it for the player entity position
+- **game**: Free camera `R` reset now snaps the pivot to the player entity position instead of the hardcoded world origin; falls back to world origin when no entity is present
 - **game**: `MsgClientInput` is now rate-limited to 60 Hz on the client; previously sent every render frame, triggering the server's per-peer flood guard (~60 packets/s limit) at frame rates above 60 fps and disconnecting the client
 - **flight**: `BuiltinFlightModel::fuel_kg` corrected from 9,999,999 kg to 200 kg; the excessive fuel mass raised total entity mass to ~10 M kg, making T/W ≈ 0.0003 — the entity could not fly and entered 90° AoA freefall indefinitely
 - **flight**: Angular rate (`omega`) and body-frame velocity clamped in `FlightIntegrator::step` (±50 rad/s and ±1030 m/s) to prevent IEEE 754 overflow to NaN during extreme flight conditions

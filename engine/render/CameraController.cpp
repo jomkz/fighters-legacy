@@ -48,9 +48,11 @@ CameraView CameraController::view(float aspectRatio, float fovY, float near) con
                             glm::angleAxis(glm::radians(m_cockpitPitch), glm::vec3{0.f, 0.f, 1.f});
         glm::vec3 viewDir = m_targetOri * lookRot * glm::vec3{1.f, 0.f, 0.f};
         cv.worldOrigin = m_targetPos;
-        glm::vec3 up{0.f, 1.f, 0.f};
+        // Use the entity's body +Y (up) in world space so that banking rolls the
+        // horizon. The look offset (yaw/pitch) does not affect the seat's up direction.
+        glm::vec3 up = m_targetOri * glm::vec3{0.f, 1.f, 0.f};
         if (std::abs(glm::dot(viewDir, up)) > 0.999f)
-            up = glm::vec3{1.f, 0.f, 0.f}; // fallback to avoid NaN near vertical
+            up = m_targetOri * glm::vec3{1.f, 0.f, 0.f}; // fallback: entity forward
         cv.view = glm::lookAt(glm::vec3(0.f), viewDir, up);
         break;
     }

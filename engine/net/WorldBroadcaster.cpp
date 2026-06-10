@@ -521,9 +521,12 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
         wind.turbulence_body[1] = turb * 0.3f * r;
         wind.turbulence_body[2] = turb * 0.5f * r;
     }
-    fi.step(static_cast<float>(simDt), ctrl, {}, wind);
+    fi.step(static_cast<float>(simDt), ctrl, {}, wind, m_groundElevation.load(std::memory_order_relaxed));
 
     const FlightState& fs = fi.state();
+    // Cache entity XZ so the main thread can steer terrain loading and update the floor.
+    m_entityX.store(fs.pos_world[0], std::memory_order_relaxed);
+    m_entityZ.store(fs.pos_world[2], std::memory_order_relaxed);
 
     // World velocity: rotate body velocity into world frame.
     float wv[3];

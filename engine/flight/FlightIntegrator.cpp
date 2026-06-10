@@ -129,8 +129,8 @@ void FlightIntegrator::integrateRotation(float dt) {
     m_state.euler[2] = euler[2];
 }
 
-void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEffect& payload,
-                            const WindInfluence& wind) {
+void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEffect& payload, const WindInfluence& wind,
+                            float groundElev) {
     // 1. Spool and optional gear/control surfaces
     advanceSpool(dt, ctrl.throttle);
 
@@ -252,6 +252,32 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     m_state.pos_world[0] += vel_world[0] * dt;
     m_state.pos_world[1] += vel_world[1] * dt;
     m_state.pos_world[2] += vel_world[2] * dt;
+
+    // 14b. Ground collision response.
+    // If the entity crossed below groundElev this tick, snap it back up and apply an
+    // impulse: high-speed impact bounces (coefficient of restitution 0.35), low-speed
+    // contact stops the vertical component. Horizontal velocity decays via friction.
+    if (m_state.pos_world[1] < groundElev) {
+        m_state.pos_world[1] = groundElev;
+        if (vel_world[1] < 0.f) {
+            constexpr float kCoR = 0.35f;   // coefficient of restitution
+            constexpr float kSlide = 0.80f; // fraction of horizontal speed retained
+            std::array<float, 3> vw = vel_world;
+            vw[1] = (std::abs(vw[1]) < 2.f) ? 0.f : -vw[1] * kCoR;
+            vw[0] *= kSlide;
+            vw[2] *= kSlide;
+            // Attenuate angular rates on impact to prevent post-contact spinning.
+            m_state.omega[0] *= 0.5f;
+            m_state.omega[1] *= 0.5f;
+            m_state.omega[2] *= 0.5f;
+            // Rotate corrected world velocity back to body frame.
+            float q_c[4] = {-m_state.quat[0], -m_state.quat[1], -m_state.quat[2], m_state.quat[3]};
+            auto vb = quatRotate(q_c, vw.data());
+            m_state.vel_body[0] = vb[0];
+            m_state.vel_body[1] = vb[1];
+            m_state.vel_body[2] = vb[2];
+        }
+    }
 
     // 15. Fuel burn
     float flow;
