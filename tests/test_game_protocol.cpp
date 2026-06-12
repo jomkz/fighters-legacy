@@ -14,6 +14,7 @@ TEST_CASE("GameProtocol: packed struct sizes match wire format", "[game_protocol
     CHECK(sizeof(fl::MsgClientInput) == 44u);
     CHECK(sizeof(fl::MsgAdminCommand) == 128u);
     CHECK(sizeof(fl::MsgAdminResponse) == 128u);
+    CHECK(sizeof(fl::MsgMotdHeader) == 3u);
 }
 
 TEST_CASE("GameProtocol: MsgWorldSnapshot round-trip", "[game_protocol]") {

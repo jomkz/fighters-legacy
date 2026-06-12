@@ -44,7 +44,8 @@ port         = 4778
 bind_address = "0.0.0.0"
 max_peers    = 32
 game_modes   = ["campaign", "mission", "sandbox"]
-motd         = ""
+motd           = ""
+motd_display_s = 0
 password     = ""
 
 [rotation]
@@ -163,7 +164,21 @@ Rule 1: no teamkilling.
 ```
 
 Each line is printed separately in the client's game console prefixed with `[server]`.
-The first line is also shown in the server notice banner; the banner fades out over the final 2 seconds before auto-dismissing (display duration is user-configurable via `motd_display_s` in `user.toml`).
+The first line is also shown in the server notice banner; the banner fades out over the final
+2 seconds before auto-dismissing. Display duration is set by `motd_display_s` (see below); when
+`motd_display_s = 0` the client's own `[client].motd_display_s` in `user.toml` is used instead.
+
+### `motd_display_s`
+
+| Type | Default | Range |
+|---|---|---|
+| integer | `0` | 0 – 65535 |
+
+How long (in seconds) the MOTD banner remains visible on each connecting client.
+
+`0` (default) — the client uses its own `[client].motd_display_s` setting (default 15 s in
+`user.toml`). A non-zero value overrides the client setting for this connection. Takes effect
+immediately for each new connection; `reload_config` applies it to subsequent connections.
 
 ### `password`
 
@@ -657,7 +672,7 @@ process.
 | `spawn` | `<type> <x> <y> <z>` | Spawn a registered entity type at the given world position |
 | `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
 | `tp` | `<idx> <x> <y> <z>` | Teleport entity `<idx>` to world position; also used by the game client's game console to teleport the player entity |
-| `reload_config` | — | Re-read `server.toml` and apply: `name` (reflected in next LAN beacon broadcast), `motd` (takes effect for new connections) |
+| `reload_config` | — | Re-read `server.toml` and apply: `name` (reflected in next LAN beacon broadcast), `motd` and `motd_display_s` (take effect for new connections) |
 | `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
 | `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |
 | `pause` | — | Pause the simulation — ticks stop advancing; network connections remain active. In single-player the game client sends this automatically when the pause menu is opened. |
@@ -673,6 +688,7 @@ process.
 |---|---|
 | `server.name` | Next LAN beacon broadcast |
 | `server.motd` | Takes effect for each subsequent client connection |
+| `server.motd_display_s` | Takes effect for each subsequent client connection |
 | `security.banlist_path` | On next `reload_banlist` command |
 | `security.allowlist_path` | On next `reload_allowlist` command |
 

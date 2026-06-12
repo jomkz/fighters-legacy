@@ -12,7 +12,7 @@ static constexpr uint8_t kNetChUnreliable = 1;
 
 // Incremented whenever the wire format changes in a backward-incompatible way.
 // Clients that receive a MsgHello with a different protocolVersion must disconnect.
-static constexpr uint16_t kProtocolVersion = 1;
+static constexpr uint16_t kProtocolVersion = 2;
 
 // Server-enforced maximum byte length of the MsgMotd text payload (NUL terminator excluded).
 // Client enforces the same cap on receive to guard against oversized packets.
@@ -194,6 +194,17 @@ struct MsgAdminResponse {
 }; // 128 bytes
 static_assert(sizeof(MsgAdminResponse) == 128u, "MsgAdminResponse wire size changed");
 static_assert(offsetof(MsgAdminResponse, text) == 2u, "MsgAdminResponse::text offset changed");
+
+// Fixed-size header for MsgMotd (0x08). The null-terminated text payload follows immediately.
+// Reliable, server→client unicast; sent once after MsgConnectAck when [server].motd non-empty.
+// displaySeconds: server-requested banner display duration (seconds); 0 = use client default.
+// kProtocolVersion was bumped to 2 when this field was added.
+struct MsgMotdHeader {
+    uint8_t msgId{static_cast<uint8_t>(MsgId::Motd)};
+    uint16_t displaySeconds{0}; // little-endian; 0 = client default
+}; // 3 bytes; char text[] + NUL follow
+static_assert(sizeof(MsgMotdHeader) == 3u, "MsgMotdHeader wire size changed");
+static_assert(offsetof(MsgMotdHeader, displaySeconds) == 1u, "MsgMotdHeader::displaySeconds offset changed");
 
 // Raw UDP presence broadcast sent by fl-server on 255.255.255.255:<port> (IPv4 broadcast) and
 // [ff02::1]:<port> (IPv6 link-local multicast) every discoveryIntervalMs milliseconds.

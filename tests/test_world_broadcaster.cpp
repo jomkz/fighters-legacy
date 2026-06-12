@@ -2042,10 +2042,10 @@ static std::vector<uint8_t> makeAdminCmd(const char* token, const char* command)
 // ---------------------------------------------------------------------------
 
 static std::string parseMotdText(const std::vector<uint8_t>& pkt) {
-    if (pkt.size() < 2 || pkt[0] != static_cast<uint8_t>(fl::MsgId::Motd))
+    if (pkt.size() < 4 || pkt[0] != static_cast<uint8_t>(fl::MsgId::Motd))
         return {};
-    // exclude msgId byte (index 0) and trailing NUL (last byte)
-    return std::string(reinterpret_cast<const char*>(pkt.data() + 1), pkt.size() - 2);
+    // exclude msgId (0), displaySeconds (1-2), and trailing NUL (last byte)
+    return std::string(reinterpret_cast<const char*>(pkt.data() + 3), pkt.size() - 4);
 }
 
 TEST_CASE("WorldBroadcaster: no MOTD sent by default", "[world_broadcaster][motd]") {
@@ -2096,8 +2096,8 @@ TEST_CASE("WorldBroadcaster: oversized MOTD capped at kMaxMotdBytes", "[world_br
     broadcaster.onConnect(0u);
 
     REQUIRE(net.sends.size() == 3u);
-    // 1 (msgId) + kMaxMotdBytes (text) + 1 (NUL) = kMaxMotdBytes + 2
-    CHECK(net.sends[2].size() == fl::kMaxMotdBytes + 2u);
+    // 1 (msgId) + 2 (displaySeconds) + kMaxMotdBytes (text) + 1 (NUL) = kMaxMotdBytes + 4
+    CHECK(net.sends[2].size() == fl::kMaxMotdBytes + 4u);
     CHECK(net.sends[2].back() == 0u); // NUL terminator
 }
 
@@ -2117,6 +2117,45 @@ TEST_CASE("WorldBroadcaster: setMotd with empty string suppresses MOTD send", "[
     CHECK(net.sends.size() == 2u);
     for (const auto& pkt : net.sends)
         CHECK(pkt[0] != static_cast<uint8_t>(fl::MsgId::Motd));
+}
+
+TEST_CASE("WorldBroadcaster: MOTD displaySeconds is 0 by default", "[world_broadcaster][motd]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setMotd("Welcome!");
+
+    broadcaster.onConnect(0u);
+
+    REQUIRE(net.sends.size() == 3u);
+    REQUIRE(net.sends[2].size() >= 3u);
+    uint16_t secs = 0;
+    std::memcpy(&secs, net.sends[2].data() + 1, sizeof(secs));
+    CHECK(secs == 0u);
+}
+
+TEST_CASE("WorldBroadcaster: MOTD packet displaySeconds matches setMotdDisplaySeconds", "[world_broadcaster][motd]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    broadcaster.setMotd("Welcome!");
+    broadcaster.setMotdDisplaySeconds(45u);
+
+    broadcaster.onConnect(0u);
+
+    REQUIRE(net.sends.size() == 3u);
+    REQUIRE(net.sends[2].size() >= 3u);
+    uint16_t secs = 0;
+    std::memcpy(&secs, net.sends[2].data() + 1, sizeof(secs));
+    CHECK(secs == 45u);
 }
 
 // ---------------------------------------------------------------------------

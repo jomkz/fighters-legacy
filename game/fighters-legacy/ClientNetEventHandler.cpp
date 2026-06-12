@@ -137,10 +137,13 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         if (console && resp.text[0] != '\0')
             console->print(std::string("[admin] ") + resp.text);
     } else if (msgId == static_cast<uint8_t>(fl::MsgId::Motd)) {
-        if (size < 2)
+        if (size < 4)
             return;
-        const std::size_t textLen = std::min(size - 1, fl::kMaxMotdBytes);
-        std::string text(static_cast<const char*>(data) + 1, textLen);
+        uint16_t wireSecs = 0;
+        std::memcpy(&wireSecs, static_cast<const uint8_t*>(data) + 1, sizeof(wireSecs));
+        const uint32_t effectiveSecs = wireSecs > 0 ? static_cast<uint32_t>(wireSecs) : motdDisplaySeconds;
+        const std::size_t textLen = std::min(size - 3, fl::kMaxMotdBytes);
+        std::string text(static_cast<const char*>(data) + 3, textLen);
         while (!text.empty() && text.back() == '\0')
             text.pop_back();
         std::istringstream stream(text);
@@ -155,7 +158,7 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             if (console)
                 console->print(prefixed);
             if (notice && first)
-                notice->setNotice(prefixed, 0, motdDisplaySeconds);
+                notice->setNotice(prefixed, 0, effectiveSecs);
             first = false;
         }
     }

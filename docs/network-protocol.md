@@ -223,24 +223,28 @@ The `text` field is null-terminated UTF-8; guaranteed within 125 bytes by the se
 ### MsgMotd — variable length
 
 Reliable, server→client unicast. Sent once per connection immediately after `MsgConnectAck`,
-only when `[server].motd` is non-empty in `server.toml`. Old clients that do not recognise
-msgId `0x08` silently discard — `kProtocolVersion` is **not** bumped.
+only when `[server].motd` is non-empty in `server.toml`. Requires `kProtocolVersion = 2`.
 
 The text is null-terminated UTF-8; the server caps the payload at `kMaxMotdBytes = 65535`
 usable characters. Multi-line MOTDs use `\n` or `\r\n` line endings — the client splits on
 newlines, prints each non-empty line to the game console prefixed `[server]`, and shows the
 first line in the server notice banner.
 
+The `displaySeconds` field lets the server specify how long its MOTD banner should remain
+visible. `displaySeconds = 0` means the client uses its own `[client].motd_display_s` setting
+(default 15 s); a non-zero value overrides the client setting for this connection.
+
 | Offset | Size | Field | Type | Notes |
 |---|---|---|---|---|
 | 0 | 1 | `msgId` | `uint8_t` | `0x08` |
-| 1 | ≤ 65535 | `text` | `char[]` | null-terminated UTF-8 MOTD; server caps at `kMaxMotdBytes` usable chars |
+| 1 | 2 | `displaySeconds` | `uint16_t` | banner duration (s); 0 = use client's `motd_display_s`; little-endian |
+| 3 | ≤ 65535 | `text` | `char[]` | null-terminated UTF-8 MOTD; server caps at `kMaxMotdBytes` usable chars |
 
-Packet size = `1 + strlen(text) + 1`. The packet has no fixed trailing padding; ENet
+Packet size = `3 + strlen(text) + 1`. The packet has no fixed trailing padding; ENet
 fragments automatically if the text exceeds the MTU.
 
 `MsgId::Motd = 0x08` is an additive message ID — clients that do not recognize it silently
-discard without error. `kProtocolVersion` is **not** bumped.
+discard without error.
 
 ### MsgLanBeacon — 74 bytes
 
@@ -321,12 +325,12 @@ server discards `MsgClientInput` packets whose `protocolVersion` does not match 
 and logs a warning. These fields serve as a defense-in-depth sanity check — the primary
 negotiation happens via `MsgHello`.
 
-**`kProtocolVersion`** is defined as `constexpr uint16_t kProtocolVersion = 1` in
+**`kProtocolVersion`** is defined as `constexpr uint16_t kProtocolVersion = 2` in
 `engine/net/GameProtocol.h`. It must be incremented whenever the wire format changes in a
 backward-incompatible way.
 
 External tools (replay readers per #41, spectator clients, LAN discovery tools) built against
-this spec are **protocol version 1** and must implement `MsgHello` handling to interoperate.
+this spec are **protocol version 2** and must implement `MsgHello` handling to interoperate.
 
 ## Bandwidth and Scalability
 
