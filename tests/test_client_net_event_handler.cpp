@@ -58,10 +58,12 @@ struct MockNetwork : INetwork {
     }
 };
 
-// Build a raw MsgMotd packet: msgId byte + text + NUL terminator.
-static std::vector<uint8_t> makeMotdPacket(std::string_view text) {
+// Build a raw MsgMotd packet: msgId byte + displaySeconds (LE) + text + NUL terminator.
+static std::vector<uint8_t> makeMotdPacket(std::string_view text, uint16_t displaySeconds = 0) {
     std::vector<uint8_t> pkt;
     pkt.push_back(static_cast<uint8_t>(fl::MsgId::Motd));
+    pkt.push_back(static_cast<uint8_t>(displaySeconds & 0xFFu));
+    pkt.push_back(static_cast<uint8_t>(displaySeconds >> 8u));
     pkt.insert(pkt.end(), text.begin(), text.end());
     pkt.push_back(0u);
     return pkt;
@@ -137,10 +139,19 @@ TEST_CASE("ClientNetEventHandler: MsgMotd packet too small does not set notice",
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
     handler.notice = &notice;
 
-    // Only 1 byte — no text payload
-    const uint8_t pkt[] = {static_cast<uint8_t>(fl::MsgId::Motd)};
-    handler.onReceive(0u, pkt, sizeof(pkt));
+    // 1 byte: msgId only
+    const uint8_t pkt1[] = {static_cast<uint8_t>(fl::MsgId::Motd)};
+    handler.onReceive(0u, pkt1, sizeof(pkt1));
+    CHECK(notice.buildElements().empty());
 
+    // 2 bytes: msgId + one byte of displaySeconds
+    const uint8_t pkt2[] = {static_cast<uint8_t>(fl::MsgId::Motd), 0x00};
+    handler.onReceive(0u, pkt2, sizeof(pkt2));
+    CHECK(notice.buildElements().empty());
+
+    // 3 bytes: msgId + displaySeconds but no NUL terminator
+    const uint8_t pkt3[] = {static_cast<uint8_t>(fl::MsgId::Motd), 0x00, 0x00};
+    handler.onReceive(0u, pkt3, sizeof(pkt3));
     CHECK(notice.buildElements().empty());
 }
 
@@ -308,4 +319,58 @@ TEST_CASE("ClientNetEventHandler: MsgMotd motdDisplaySeconds 0 is persistent", "
 
     fakeTime += std::chrono::seconds(3600);
     CHECK(!notice.buildElements().empty()); // still shown — no expiry set
+}
+
+TEST_CASE("ClientNetEventHandler: MsgMotd server displaySeconds overrides client motdDisplaySeconds",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    auto fakeTime = std::chrono::steady_clock::now();
+    ServerNotice notice;
+    notice.setClockOverride([&fakeTime]() { return fakeTime; });
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.notice = &notice;
+    handler.motdDisplaySeconds = 15; // client default
+
+    auto pkt = makeMotdPacket("Rules", 30); // server requests 30 s
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    REQUIRE(!notice.buildElements().empty());
+
+    fakeTime += std::chrono::seconds(29);
+    CHECK(!notice.buildElements().empty()); // still within server window
+
+    fakeTime += std::chrono::seconds(2);
+    CHECK(notice.buildElements().empty()); // expired at 31 s (past 30 s server window)
+}
+
+TEST_CASE("ClientNetEventHandler: MsgMotd server displaySeconds 0 falls back to client motdDisplaySeconds",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    auto fakeTime = std::chrono::steady_clock::now();
+    ServerNotice notice;
+    notice.setClockOverride([&fakeTime]() { return fakeTime; });
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+    handler.notice = &notice;
+    handler.motdDisplaySeconds = 5; // client prefers 5 s
+
+    auto pkt = makeMotdPacket("Hi", 0); // server defers to client
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    REQUIRE(!notice.buildElements().empty());
+
+    fakeTime += std::chrono::seconds(4);
+    CHECK(!notice.buildElements().empty()); // within client window
+
+    fakeTime += std::chrono::seconds(2);
+    CHECK(notice.buildElements().empty()); // expired at 6 s (past 5 s client window)
 }

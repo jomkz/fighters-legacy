@@ -156,6 +156,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // enqueueSimCallback for hot-reload (reload_config).
     void setMotd(std::string motd);
 
+    // Set the display duration (seconds) embedded in MsgMotd (displaySeconds field).
+    // 0 = client uses its own motd_display_s setting (the default).
+    // Call alongside setMotd() before gameLoop.start() or via enqueueSimCallback.
+    void setMotdDisplaySeconds(uint16_t seconds) noexcept;
+
     // Configure the operator password for MsgAdminCommand authentication.
     // Empty string disables the network admin channel. Call before gameLoop.start().
     void setOperatorPassword(std::string password);
@@ -214,7 +219,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     std::function<std::chrono::steady_clock::time_point()> m_now{std::chrono::steady_clock::now};
 
     // MOTD state (set before gameLoop.start() or via enqueueSimCallback; read on sim thread only).
-    std::string m_motd; // empty = no MOTD sent
+    std::string m_motd;               // empty = no MOTD sent
+    uint16_t m_motdDisplaySeconds{0}; // 0 = client default
 
     // Network admin channel state (set before gameLoop.start(); read on sim thread only).
     std::string m_operatorPassword;                               // empty = admin channel disabled

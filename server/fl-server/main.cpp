@@ -388,6 +388,7 @@ int main(int argc, char** argv) {
 
     if (!cfg.motd.empty())
         broadcaster.setMotd(cfg.motd);
+    broadcaster.setMotdDisplaySeconds(cfg.motdDisplayS);
 
     if (!cfg.operatorPassword.empty()) {
         broadcaster.setOperatorPassword(cfg.operatorPassword);

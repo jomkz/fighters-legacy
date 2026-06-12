@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "server_config.h"
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <toml++/toml.hpp>
@@ -33,6 +34,9 @@ static const char* kDefaultToml =
     "\n"
     "# Message shown to connecting clients. Empty string = no message.\n"
     "motd = \"\"\n"
+    "\n"
+    "# Override client MOTD banner timeout (seconds). 0 = use client's motd_display_s setting.\n"
+    "motd_display_s = 0\n"
     "\n"
     "# Server password. Empty string = no password required.\n"
     "password = \"\"\n"
@@ -161,6 +165,13 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
         }
         if (auto v = tbl["server"]["motd"].value<std::string>())
             cfg.motd = std::move(*v);
+        if (auto v = tbl["server"]["motd_display_s"].value<int64_t>()) {
+            int64_t clamped = std::clamp(*v, int64_t{0}, int64_t{65535});
+            if (clamped != *v)
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "server.motd_display_s out of range; clamped to [0, 65535]");
+            cfg.motdDisplayS = static_cast<uint16_t>(clamped);
+        }
         if (auto v = tbl["server"]["password"].value<std::string>())
             cfg.password = std::move(*v);
 

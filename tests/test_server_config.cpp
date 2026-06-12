@@ -19,6 +19,7 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.maxPeers == 32);
     CHECK(cfg.gameModes == (std::vector<std::string>{"campaign", "mission", "sandbox"}));
     CHECK(cfg.motd.empty());
+    CHECK(cfg.motdDisplayS == 0u);
     CHECK(cfg.password.empty());
     CHECK(cfg.rotationOrder == "sequential");
     CHECK(cfg.rotationItems.empty());
@@ -84,6 +85,41 @@ password     = "s3cr3t"
     CHECK(cfg.motd == "Welcome!");
     CHECK(cfg.password == "s3cr3t");
     CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: reads motd_display_s from [server] section", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[server]\nmotd_display_s = 30\n", &log);
+    CHECK(cfg.motdDisplayS == 30u);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: motd_display_s 0 is accepted", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[server]\nmotd_display_s = 0\n", &log);
+    CHECK(cfg.motdDisplayS == 0u);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: motd_display_s boundary 65535 is accepted", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[server]\nmotd_display_s = 65535\n", &log);
+    CHECK(cfg.motdDisplayS == 65535u);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: motd_display_s 65536 warns and clamps to 65535", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[server]\nmotd_display_s = 65536\n", &log);
+    CHECK(cfg.motdDisplayS == 65535u);
+    CHECK(log.hasMessage(LogLevel::Warn, "server.motd_display_s out of range"));
+}
+
+TEST_CASE("parseServerConfig: motd_display_s negative warns and clamps to 0", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[server]\nmotd_display_s = -1\n", &log);
+    CHECK(cfg.motdDisplayS == 0u);
+    CHECK(log.hasMessage(LogLevel::Warn, "server.motd_display_s out of range"));
 }
 
 TEST_CASE("parseServerConfig: port 0 warns and keeps default", "[server_config]") {

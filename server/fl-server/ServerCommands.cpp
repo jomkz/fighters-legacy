@@ -479,27 +479,31 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         });
 
     // reload_config
-    registry.registerCommand("reload_config",
-                             "reload_config  -- re-read server.toml and apply: name (beacon), motd (new connections)",
-                             [ctx](std::span<std::string_view>) -> std::string {
-                                 if (!ctx.configPath || ctx.configPath->empty())
-                                     return "reload_config: not available";
-                                 std::ifstream f(*ctx.configPath);
-                                 if (!f)
-                                     return "reload_config: cannot open " + *ctx.configPath;
-                                 std::ostringstream ss;
-                                 ss << f.rdbuf();
-                                 ServerConfig newCfg = parseServerConfig(ss.str(), ctx.logger);
-                                 if (ctx.beacon)
-                                     ctx.beacon->setName(newCfg.name);
-                                 if (ctx.broadcaster && ctx.gameLoop) {
-                                     auto newMotd = newCfg.motd;
-                                     ctx.gameLoop->enqueueSimCallback(
-                                         [ctx, newMotd]() mutable { ctx.broadcaster->setMotd(std::move(newMotd)); });
-                                 }
-                                 return "reload_config: name=\"" + newCfg.name + "\"  motd=\"" + newCfg.motd +
-                                        "\"  (other fields require restart)";
-                             });
+    registry.registerCommand(
+        "reload_config",
+        "reload_config  -- re-read server.toml and apply: name (beacon), motd, motd_display_s (new connections)",
+        [ctx](std::span<std::string_view>) -> std::string {
+            if (!ctx.configPath || ctx.configPath->empty())
+                return "reload_config: not available";
+            std::ifstream f(*ctx.configPath);
+            if (!f)
+                return "reload_config: cannot open " + *ctx.configPath;
+            std::ostringstream ss;
+            ss << f.rdbuf();
+            ServerConfig newCfg = parseServerConfig(ss.str(), ctx.logger);
+            if (ctx.beacon)
+                ctx.beacon->setName(newCfg.name);
+            if (ctx.broadcaster && ctx.gameLoop) {
+                auto newMotd = newCfg.motd;
+                auto newMotdDisplayS = newCfg.motdDisplayS;
+                ctx.gameLoop->enqueueSimCallback([ctx, newMotd, newMotdDisplayS]() mutable {
+                    ctx.broadcaster->setMotd(std::move(newMotd));
+                    ctx.broadcaster->setMotdDisplaySeconds(newMotdDisplayS);
+                });
+            }
+            return "reload_config: name=\"" + newCfg.name + "\"  motd=\"" + newCfg.motd +
+                   "\"  motd_display_s=" + std::to_string(newCfg.motdDisplayS) + "  (other fields require restart)";
+        });
 
     // reload_banlist
     registry.registerCommand(

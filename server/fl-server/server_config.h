@@ -14,6 +14,7 @@ struct ServerConfig {
     int maxPeers = 32;
     std::vector<std::string> gameModes = {"campaign", "mission", "sandbox"};
     std::string motd;
+    uint16_t motdDisplayS{0}; // seconds; 0 = use client's motd_display_s setting
     std::string password;
 
     // [rotation]  — Phase 2: parsed and stored; rotation logic pending
