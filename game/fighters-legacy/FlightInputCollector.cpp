@@ -8,7 +8,6 @@
 #include "console/GameConsole.h"
 #include "render/SimRenderBridge.h"
 
-#include <SDL3/SDL.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -18,29 +17,27 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
                                                              IJoystick* joystick, const ControlsSettings& cs) {
     m_weaponFired = false;
 
-    using clock = std::chrono::steady_clock;
-    const auto now = clock::now();
+    const auto now = m_clock();
     if (std::chrono::duration<float>(now - m_lastInputTime).count() < 1.0f / 60.0f)
         return std::nullopt;
     m_lastInputTime = now;
 
-    const bool* keys = SDL_GetKeyboardState(nullptr);
     fl::MsgClientInput inp;
     inp.seqNum = m_inputSeq++;
     inp.tickIndex = bridge.hasSnapshot() ? bridge.current().tickIndex : 0;
 
     constexpr float kThrottleStep = 1.0f / 60.0f;
     if (!console.isOpen()) {
-        if (keys[SDL_SCANCODE_PAGEUP])
+        if (input.isKeyDown(Key::PageUp))
             camInput.adjustThrottle(kThrottleStep);
-        if (keys[SDL_SCANCODE_PAGEDOWN])
+        if (input.isKeyDown(Key::PageDown))
             camInput.adjustThrottle(-kThrottleStep);
-        inp.throttle = keys[SDL_SCANCODE_LSHIFT] ? 1.f : camInput.throttle();
-        inp.elevator = (keys[SDL_SCANCODE_UP] ? -1.f : 0.f) + (keys[SDL_SCANCODE_DOWN] ? 1.f : 0.f);
-        inp.aileron = (keys[SDL_SCANCODE_RIGHT] ? 1.f : 0.f) + (keys[SDL_SCANCODE_LEFT] ? -1.f : 0.f);
-        inp.rudder = (keys[SDL_SCANCODE_X] ? 1.f : 0.f) + (keys[SDL_SCANCODE_Z] ? -1.f : 0.f);
-        inp.buttons = keys[SDL_SCANCODE_SPACE] ? 1u : 0u;
-        if (keys[SDL_SCANCODE_TAB])
+        inp.throttle = input.isKeyDown(Key::LeftShift) ? 1.f : camInput.throttle();
+        inp.elevator = (input.isKeyDown(Key::ArrowUp) ? -1.f : 0.f) + (input.isKeyDown(Key::ArrowDown) ? 1.f : 0.f);
+        inp.aileron = (input.isKeyDown(Key::ArrowRight) ? 1.f : 0.f) + (input.isKeyDown(Key::ArrowLeft) ? -1.f : 0.f);
+        inp.rudder = (input.isKeyDown(Key::X) ? 1.f : 0.f) + (input.isKeyDown(Key::Z) ? -1.f : 0.f);
+        inp.buttons = input.isKeyDown(Key::Space) ? 1u : 0u;
+        if (input.isKeyDown(Key::Tab))
             inp.buttons |= 0x02u;
         m_weaponFired = (inp.buttons & 1u) != 0u;
 
@@ -117,4 +114,8 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
     }
 
     return inp;
+}
+
+void FlightInputCollector::setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn) {
+    m_clock = std::move(fn);
 }

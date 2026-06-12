@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <optional>
 
 class CameraInput;
@@ -37,8 +38,11 @@ class FlightInputCollector {
         return m_weaponFired;
     }
 
+    void setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn);
+
   private:
     uint32_t m_inputSeq{0};
-    std::chrono::steady_clock::time_point m_lastInputTime{std::chrono::steady_clock::now()};
+    std::function<std::chrono::steady_clock::time_point()> m_clock{std::chrono::steady_clock::now};
+    std::chrono::steady_clock::time_point m_lastInputTime{};
     bool m_weaponFired{false};
 };

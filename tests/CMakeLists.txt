@@ -385,6 +385,29 @@ target_include_directories(test_haptic_controller PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}")
 catch_discover_tests(test_haptic_controller)
 
+add_executable(test_flight_input_collector test_flight_input_collector.cpp
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/FlightInputCollector.cpp"
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy/CameraInput.cpp")
+target_link_libraries(test_flight_input_collector PRIVATE
+    Catch2::Catch2WithMain
+    platform-hal
+    platform-sdl3
+    SDL3::SDL3
+    engine-render
+    engine-console
+    engine-config
+    engine-net)
+target_include_directories(test_flight_input_collector PRIVATE
+    "${CMAKE_SOURCE_DIR}/game/fighters-legacy"
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+if(WIN32)
+    add_custom_command(TARGET test_flight_input_collector POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:SDL3::SDL3>
+            $<TARGET_FILE_DIR:test_flight_input_collector>)
+endif()
+catch_discover_tests(test_flight_input_collector)
+
 add_executable(test_server_notice test_server_notice.cpp)
 target_link_libraries(test_server_notice PRIVATE
     Catch2::Catch2WithMain platform-hal)
