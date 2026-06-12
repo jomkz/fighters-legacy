@@ -392,6 +392,8 @@ struct MockDisplay : public IDisplay {
 
 struct MockJoystick : public IJoystick {
     int count = 0;
+    int axisCount = 0;
+    std::map<std::pair<int, int>, float> axisValues;
 
     int getJoystickCount() const override {
         return count;
@@ -403,10 +405,11 @@ struct MockJoystick : public IJoystick {
         return "00000000000000000000000000000000";
     }
     int getAxisCount(int) const override {
-        return 0;
+        return axisCount;
     }
-    float getAxisValue(int, int) const override {
-        return 0.0f;
+    float getAxisValue(int j, int a) const override {
+        auto it = axisValues.find({j, a});
+        return it != axisValues.end() ? it->second : 0.0f;
     }
     int getHatCount(int) const override {
         return 0;

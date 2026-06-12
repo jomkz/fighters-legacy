@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **test**: `test_flight_input_collector` — unit tests for `FlightInputCollector::poll()` covering keyboard (all 11 bindings), gamepad (buttons + axes + deadzone), HOTAS override path, combined keyboard+gamepad OR, console-open suppression, rate-limiter clock injection, and `seqNum`/`tickIndex` correctness; closes #311
 - **game**: wire afterburner keyboard (`Tab`) and configurable gamepad left-shoulder button (`[controls].afterburner_button`, default index 4) in `FlightInputCollector`; sets `MsgClientInput::buttons` bit 1 so content-pack aircraft with `ab_thrust` tables can command afterburner; closes #307
 - **network**: `MsgMotd` (0x08) extended with a `displaySeconds uint16_t` field at wire offset 1; fl-server exposes `[server].motd_display_s` in `server.toml` (0 = use client's `[client].motd_display_s`); `kProtocolVersion` bumped 1 → 2; closes #302
 - **game**: multiplayer client connection — pass `--connect <host[:port]>` to join a remote `fl-server` without spawning a local one; `--operator-password <pw>` (or `FL_OPERATOR_PASSWORD` env var or `[client].operator_password` in user.toml) enables the admin console channel in multiplayer; main menu shows "Join Server" when connecting remotely; loading screen shows "Connecting to remote server…" and times out after 10 s; closes #240
@@ -23,6 +24,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **game**: `FlightInputCollector::poll()` now reads keyboard state through `IInput::isKeyDown` instead of `SDL_GetKeyboardState`; exposes `setClockOverride` for deterministic test injection; closes #311
 - **engine**: rename debug console subsystem — `DebugConsole`→`GameConsole`, `DebugCommandRegistry`→`CommandRegistry`, `DebugCommandContext`→`CommandContext`; files moved from `engine/debug/` to `engine/console/`; `AdminConsole.h/.cpp`→`ServerCommands.h/.cpp`; CMake target `engine-debug`→`engine-console` (#292)
 - **renderer**: `ServerNotice` MOTD banners now auto-dismiss after 15 seconds; shutdown countdown notices remain persistent (`visibleSeconds = 0`)
 - **game**: introduce `Game` class (pimpl) encapsulating the full application lifecycle; `main.cpp` reduced from 590 lines to 20; init sequence split into six named private methods (`initPlatform`, `initWindowAndRenderer`, `initContent`, `initGameSystems`, `initNetwork`, `initGameConsole`); all state moved from `main()` locals into `GameImpl`; extract `FlightInputCollector`, `PrecipitationController`, and `CameraInput::pollModeKeys`; add named free functions for audio listener, roll angle, perf overlay, and player lookup — pure structural refactor, no behavioral change
