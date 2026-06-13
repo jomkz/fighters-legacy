@@ -72,6 +72,8 @@ difficulty_floor = "recruit"
 [security]
 pre_handshake_rate_limit_count = 20   # max CONNECT attempts per IP per window; 0 = disabled
 pre_handshake_window_ms        = 1000 # sliding window in milliseconds
+admin_auth_max_failures        = 5    # wrong operator passwords before per-IP lockout [1,100]
+admin_auth_lockout_s           = 300  # per-IP lockout duration in seconds [1,86400]
 
 [rcon]
 enabled           = false
@@ -513,6 +515,30 @@ networks or behind a VPN. Passwords longer than 29 characters are silently trunc
 client (the wire field is 30 bytes including the NUL terminator). Response text is capped
 at 125 characters per reply; long command output (e.g. `peers` with many players) is
 silently truncated.
+
+### `admin_auth_max_failures`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `5` | 1–100 |
+
+Maximum consecutive wrong-password attempts allowed on the `MsgAdminCommand` channel before
+the source IP is locked out. Once the threshold is reached the offending peer is kicked and
+reconnections from that IP are refused until the lockout TTL expires (see `admin_auth_lockout_s`).
+Set to `1` to lock out on the first failure.
+
+The failure counter is per-IP and persists across disconnect/reconnect — so an attacker cannot
+reset the counter by reconnecting. A successful authentication clears the counter for that IP.
+
+### `admin_auth_lockout_s`
+
+| Type | Default | Valid range |
+|---|---|---|
+| integer | `300` (5 minutes) | 1–86400 |
+
+Per-IP lockout duration in seconds after `admin_auth_max_failures` consecutive wrong passwords.
+During the lockout window, any new connection from the same IP is refused immediately (no
+`MsgHello` sent). The lockout expires automatically; no operator action is required.
 
 ---
 

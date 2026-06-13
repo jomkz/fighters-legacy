@@ -91,6 +91,13 @@ static const char* kDefaultToml =
     "# Range [0, 128]. Applies post-handshake, after the rate-limit check.\n"
     "max_connections_per_ip = 0\n"
     "\n"
+    "# Per-IP lockout for the operator network admin channel (MsgAdminCommand).\n"
+    "# After admin_auth_max_failures consecutive wrong passwords from the same IP the peer\n"
+    "# is kicked and reconnections from that IP are refused for admin_auth_lockout_s seconds.\n"
+    "# Range: max_failures [1,100], lockout_s [1,86400].\n"
+    "admin_auth_max_failures = 5\n"
+    "admin_auth_lockout_s = 300\n"
+    "\n"
     "[shutdown]\n"
     "shutdown_warning_interval_s = 300\n"
     "min_shutdown_delay_s = 0\n"
@@ -326,6 +333,22 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                          "security.max_connections_per_ip out of range [0,128]; using default");
             } else {
                 cfg.maxConnectionsPerIp = static_cast<int>(*v);
+            }
+        }
+        if (auto v = tbl["security"]["admin_auth_max_failures"].value<int64_t>()) {
+            if (*v < 1 || *v > 100) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "security.admin_auth_max_failures out of range [1,100]; using default");
+            } else {
+                cfg.adminAuthMaxFailures = static_cast<int>(*v);
+            }
+        }
+        if (auto v = tbl["security"]["admin_auth_lockout_s"].value<int64_t>()) {
+            if (*v < 1 || *v > 86400) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "security.admin_auth_lockout_s out of range [1,86400]; using default");
+            } else {
+                cfg.adminAuthLockoutSeconds = static_cast<int>(*v);
             }
         }
 
