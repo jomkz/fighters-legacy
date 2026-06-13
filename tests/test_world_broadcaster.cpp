@@ -2388,3 +2388,294 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand long result truncated to 125 chars"
     CHECK(std::strlen(resp.text) == 125u);
     CHECK(resp.text[125] == '\0');
 }
+
+// ---------------------------------------------------------------------------
+// Admin auth lockout tests
+// ---------------------------------------------------------------------------
+
+// Shared setup helper: broadcaster with password "pw", dispatch noop, 3-failure
+// threshold, 60 s lockout, injectable clock, and peer 0 connected from 1.2.3.4.
+static void setupAuthFixture(fl::WorldBroadcaster& broadcaster, MockNetwork& net,
+                             std::chrono::steady_clock::time_point& now) {
+    broadcaster.setOperatorPassword("pw");
+    broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "ok"; });
+    broadcaster.setAdminAuthParams(3, 60);
+    broadcaster.setClockOverride([&now] { return now; });
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+    net.disconnectedPeers.clear();
+}
+
+TEST_CASE("WorldBroadcaster: admin auth no lockout before threshold", "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    auto now = std::chrono::steady_clock::now();
+    setupAuthFixture(broadcaster, net, now);
+
+    // N-1 = 2 failures; peer must remain connected after each
+    for (int i = 0; i < 2; ++i) {
+        auto pkt = makeAdminCmd("wrongpass", "status");
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+        CHECK(net.disconnectedPeers.empty());
+    }
+}
+
+TEST_CASE("WorldBroadcaster: admin auth lockout triggered on Nth failure — peer kicked",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    auto now = std::chrono::steady_clock::now();
+    setupAuthFixture(broadcaster, net, now);
+
+    // 2 failures — no kick
+    for (int i = 0; i < 2; ++i) {
+        auto pkt = makeAdminCmd("wrongpass", "status");
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+    }
+    CHECK(net.disconnectedPeers.empty());
+
+    // 3rd failure — lockout: peer kicked
+    auto pkt = makeAdminCmd("wrongpass", "status");
+    broadcaster.onReceive(0u, pkt.data(), pkt.size());
+    REQUIRE(net.disconnectedPeers.size() == 1u);
+    CHECK(net.disconnectedPeers[0] == 0u);
+}
+
+TEST_CASE("WorldBroadcaster: admin auth onConnect refused while locked", "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    net.peerAddresses[1] = "1.2.3.4:5678"; // same IP, new port (reconnect)
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    auto now = std::chrono::steady_clock::now();
+    setupAuthFixture(broadcaster, net, now);
+
+    // Trigger lockout on peer 0
+    for (int i = 0; i < 3; ++i) {
+        auto pkt = makeAdminCmd("wrongpass", "status");
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+    }
+    net.disconnectedPeers.clear();
+    net.sends.clear();
+
+    // Reconnect attempt from same IP — must be refused
+    broadcaster.onConnect(1u);
+    REQUIRE(net.disconnectedPeers.size() == 1u);
+    CHECK(net.disconnectedPeers[0] == 1u);
+    // No MsgHello should have been sent
+    CHECK(net.sends.empty());
+}
+
+TEST_CASE("WorldBroadcaster: admin auth lockout expires after TTL", "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    net.peerAddresses[1] = "1.2.3.4:5678";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    auto now = std::chrono::steady_clock::now();
+    setupAuthFixture(broadcaster, net, now);
+
+    // Trigger lockout
+    for (int i = 0; i < 3; ++i) {
+        auto pkt = makeAdminCmd("wrongpass", "status");
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+    }
+    net.disconnectedPeers.clear();
+    net.sends.clear();
+
+    // Advance clock past 60 s TTL
+    now += std::chrono::seconds(61);
+
+    // Reconnect — should succeed (MsgHello sent, not in disconnectedPeers)
+    broadcaster.onConnect(1u);
+    CHECK(net.disconnectedPeers.empty());
+    REQUIRE(!net.sends.empty());
+    fl::MsgHello hello{};
+    std::memcpy(&hello, net.sends.front().data(), sizeof(hello));
+    CHECK(hello.msgId == static_cast<uint8_t>(fl::MsgId::Hello));
+}
+
+TEST_CASE("WorldBroadcaster: admin auth per-IP isolation", "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234"; // IP A
+    net.peerAddresses[1] = "5.6.7.8:2222"; // IP B — different
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    auto now = std::chrono::steady_clock::now();
+    setupAuthFixture(broadcaster, net, now);
+
+    // Connect peer 1 from IP B
+    broadcaster.onConnect(1u);
+    net.sends.clear();
+    net.disconnectedPeers.clear();
+
+    // Lock out IP A (3 wrong tokens on peer 0)
+    for (int i = 0; i < 3; ++i) {
+        auto pkt = makeAdminCmd("wrongpass", "status");
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+    }
+    net.disconnectedPeers.clear();
+    net.sends.clear();
+
+    // IP B can still dispatch successfully
+    auto pkt = makeAdminCmd("pw", "status");
+    broadcaster.onReceive(1u, pkt.data(), pkt.size());
+    CHECK(net.disconnectedPeers.empty());
+    REQUIRE(net.sends.size() == 1u);
+    fl::MsgAdminResponse resp{};
+    REQUIRE(parseLastAdminResponse(net, resp));
+    CHECK(std::string(resp.text) == "ok");
+}
+
+TEST_CASE("WorldBroadcaster: admin auth failure counter persists across disconnect-reconnect",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    net.peerAddresses[1] = "1.2.3.4:5678"; // same normalized IP, new peerId
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    auto now = std::chrono::steady_clock::now();
+    setupAuthFixture(broadcaster, net, now);
+
+    // 2 failures on peer 0 — below threshold
+    for (int i = 0; i < 2; ++i) {
+        auto pkt = makeAdminCmd("wrongpass", "status");
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+    }
+    CHECK(net.disconnectedPeers.empty());
+
+    // Peer 0 disconnects
+    broadcaster.onDisconnect(0u);
+    net.disconnectedPeers.clear();
+    net.sends.clear();
+
+    // Peer 1 reconnects from same IP; one more failure should trigger lockout (counter IP-keyed)
+    broadcaster.onConnect(1u);
+    net.sends.clear();
+    net.disconnectedPeers.clear();
+
+    auto pkt = makeAdminCmd("wrongpass", "status");
+    broadcaster.onReceive(1u, pkt.data(), pkt.size());
+    REQUIRE(net.disconnectedPeers.size() == 1u);
+    CHECK(net.disconnectedPeers[0] == 1u);
+}
+
+TEST_CASE("WorldBroadcaster: admin auth correct token resets failure counter", "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    auto now = std::chrono::steady_clock::now();
+    setupAuthFixture(broadcaster, net, now);
+
+    // N-1 = 2 failures
+    for (int i = 0; i < 2; ++i) {
+        auto pkt = makeAdminCmd("wrongpass", "status");
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+    }
+    CHECK(net.disconnectedPeers.empty());
+
+    // Successful auth — clears the counter
+    auto good = makeAdminCmd("pw", "status");
+    broadcaster.onReceive(0u, good.data(), good.size());
+    CHECK(net.disconnectedPeers.empty());
+
+    // 2 more failures — should NOT trigger lockout (counter was reset)
+    for (int i = 0; i < 2; ++i) {
+        auto pkt = makeAdminCmd("wrongpass", "status");
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+    }
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: admin auth wrong tokens when operator_password unset do not record failures",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    net.peerAddresses[1] = "1.2.3.4:5678";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    auto now = std::chrono::steady_clock::now();
+    broadcaster.setAdminAuthParams(3, 60);
+    broadcaster.setClockOverride([&now] { return now; });
+    // Note: operator_password intentionally NOT set — admin channel disabled
+    broadcaster.onConnect(0u);
+    net.sends.clear();
+    net.disconnectedPeers.clear();
+
+    // Send N+5 = 8 wrong-token packets — admin channel is disabled so none are processed
+    for (int i = 0; i < 8; ++i) {
+        auto pkt = makeAdminCmd("wrongpass", "status");
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+    }
+    CHECK(net.disconnectedPeers.empty());
+
+    // Reconnect from same IP — must not be blocked (no failures recorded)
+    broadcaster.onConnect(1u);
+    CHECK(net.disconnectedPeers.empty());
+}
+
+TEST_CASE("WorldBroadcaster: admin auth pruneExpired fires after 600 onTick calls",
+          "[world_broadcaster][admin_command]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    net.peerAddresses[1] = "1.2.3.4:5678";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+    auto now = std::chrono::steady_clock::now();
+    setupAuthFixture(broadcaster, net, now);
+
+    // Trigger lockout
+    for (int i = 0; i < 3; ++i) {
+        auto pkt = makeAdminCmd("wrongpass", "status");
+        broadcaster.onReceive(0u, pkt.data(), pkt.size());
+    }
+    net.disconnectedPeers.clear();
+    net.sends.clear();
+
+    // Advance past TTL — lockout entry is now expired but not yet pruned
+    now += std::chrono::seconds(61);
+
+    // Drive 600 onTick calls to trigger the prune cycle
+    for (int i = 0; i < 600; ++i)
+        broadcaster.onTick(1.0 / 60.0, static_cast<uint64_t>(i + 1));
+
+    // After prune + TTL expiry, reconnect from same IP must succeed
+    broadcaster.onConnect(1u);
+    CHECK(net.disconnectedPeers.empty());
+    REQUIRE(!net.sends.empty());
+    fl::MsgHello hello{};
+    std::memcpy(&hello, net.sends.front().data(), sizeof(hello));
+    CHECK(hello.msgId == static_cast<uint8_t>(fl::MsgId::Hello));
+}

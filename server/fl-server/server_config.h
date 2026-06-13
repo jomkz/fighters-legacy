@@ -61,6 +61,8 @@ struct ServerConfig {
     int preHandshakeRateLimitCount = 20; // max CONNECT attempts per IP per window; 0 = disabled
     int preHandshakeWindowMs = 1000;     // sliding window in milliseconds
     int maxConnectionsPerIp = 0;         // max simultaneous connections per IP; 0 = unlimited
+    int adminAuthMaxFailures = 5;        // consecutive wrong-password attempts before per-IP lockout [1,100]
+    int adminAuthLockoutSeconds = 300;   // per-IP lockout duration in seconds [1,86400]
 
     // [rcon]
     struct RconConfig {

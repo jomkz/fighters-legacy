@@ -133,58 +133,6 @@ std::vector<std::string> splitResponse(std::string_view body) {
 } // namespace rcon
 
 // ---------------------------------------------------------------------------
-// rcon::AuthTracker implementation
-// ---------------------------------------------------------------------------
-
-namespace rcon {
-
-AuthTracker::AuthTracker(int maxFailures, int lockoutSeconds)
-    : m_maxFailures(maxFailures), m_lockoutDuration(lockoutSeconds),
-      m_now([] { return std::chrono::steady_clock::now(); }) {}
-
-bool AuthTracker::recordFailure(const std::string& ip) {
-    auto& count = m_failCount[ip];
-    ++count;
-    if (count >= m_maxFailures) {
-        m_lockouts[ip] = m_now() + m_lockoutDuration;
-        m_failCount.erase(ip);
-        return true;
-    }
-    return false;
-}
-
-void AuthTracker::recordSuccess(const std::string& ip) {
-    m_failCount.erase(ip);
-}
-
-bool AuthTracker::isLockedOut(const std::string& ip) {
-    auto it = m_lockouts.find(ip);
-    if (it == m_lockouts.end())
-        return false;
-    if (m_now() >= it->second) {
-        m_lockouts.erase(it);
-        return false;
-    }
-    return true;
-}
-
-void AuthTracker::pruneExpired() {
-    auto now = m_now();
-    for (auto it = m_lockouts.begin(); it != m_lockouts.end();) {
-        if (now >= it->second)
-            it = m_lockouts.erase(it);
-        else
-            ++it;
-    }
-}
-
-void AuthTracker::setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn) {
-    m_now = std::move(fn);
-}
-
-} // namespace rcon
-
-// ---------------------------------------------------------------------------
 // Per-client state
 // ---------------------------------------------------------------------------
 
@@ -225,7 +173,7 @@ struct RconServer::Impl {
     std::atomic<bool> m_running{false};
     std::thread m_thread;
     RconSocket m_listenSock = kInvalidSocket;
-    rcon::AuthTracker m_authTracker;
+    fl::AuthTracker m_authTracker;
 
     Impl(const CommandRegistry& reg, const ServerConfig::RconConfig& cfg, ILogger& log, CommandShell* shell)
         : m_registry(reg), m_cfg(cfg), m_log(log), m_shell(shell),

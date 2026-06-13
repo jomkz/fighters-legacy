@@ -338,6 +338,7 @@ int main(int argc, char** argv) {
     fl::WorldBroadcaster broadcaster(entityManager, entityRegistry, *net, *log, &weatherController);
     broadcaster.setRateLimitParams(cfg.connectRateLimitCount, cfg.connectRateLimitWindowS, cfg.packetFloodMultiplier);
     broadcaster.setMaxConnectionsPerIp(cfg.maxConnectionsPerIp);
+    broadcaster.setAdminAuthParams(cfg.adminAuthMaxFailures, cfg.adminAuthLockoutSeconds);
     // Seed the ground floor from the already-primed TerrainStreamer at the spawn origin.
     // Used by FlightIntegrator::step as the physics floor and by onConnect for peer spawn
     // altitude (peers spawn at groundElevation + 500 m AGL). Updated each frame below.

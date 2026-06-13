@@ -160,13 +160,13 @@ TEST_CASE("splitResponse returns one empty string for empty body", "[rcon][split
 }
 
 // ---------------------------------------------------------------------------
-// rcon::AuthTracker — per-IP failed-auth counter and lockout
+// fl::AuthTracker — per-IP failed-auth counter and lockout
 // ---------------------------------------------------------------------------
 
 using SteadyTp = std::chrono::steady_clock::time_point;
 
 TEST_CASE("AuthTracker: counter increments, no lockout before threshold", "[rcon][auth_tracker]") {
-    rcon::AuthTracker tracker(5, 60);
+    fl::AuthTracker tracker(5, 60);
     for (int i = 0; i < 4; ++i) {
         CHECK_FALSE(tracker.recordFailure("1.2.3.4"));
         CHECK_FALSE(tracker.isLockedOut("1.2.3.4"));
@@ -174,7 +174,7 @@ TEST_CASE("AuthTracker: counter increments, no lockout before threshold", "[rcon
 }
 
 TEST_CASE("AuthTracker: lockout triggered on Nth failure", "[rcon][auth_tracker]") {
-    rcon::AuthTracker tracker(5, 60);
+    fl::AuthTracker tracker(5, 60);
     for (int i = 0; i < 4; ++i)
         tracker.recordFailure("1.2.3.4");
     CHECK(tracker.recordFailure("1.2.3.4")); // 5th = lockout
@@ -182,7 +182,7 @@ TEST_CASE("AuthTracker: lockout triggered on Nth failure", "[rcon][auth_tracker]
 }
 
 TEST_CASE("AuthTracker: isLockedOut false after expiry (clock override)", "[rcon][auth_tracker]") {
-    rcon::AuthTracker tracker(5, 60);
+    fl::AuthTracker tracker(5, 60);
     SteadyTp now{};
     tracker.setClockOverride([&now] { return now; });
     for (int i = 0; i < 5; ++i)
@@ -193,7 +193,7 @@ TEST_CASE("AuthTracker: isLockedOut false after expiry (clock override)", "[rcon
 }
 
 TEST_CASE("AuthTracker: recordSuccess clears failure counter", "[rcon][auth_tracker]") {
-    rcon::AuthTracker tracker(5, 60);
+    fl::AuthTracker tracker(5, 60);
     for (int i = 0; i < 3; ++i)
         tracker.recordFailure("1.2.3.4");
     tracker.recordSuccess("1.2.3.4");
@@ -205,7 +205,7 @@ TEST_CASE("AuthTracker: recordSuccess clears failure counter", "[rcon][auth_trac
 }
 
 TEST_CASE("AuthTracker: recordSuccess does not clear an active lockout", "[rcon][auth_tracker]") {
-    rcon::AuthTracker tracker(5, 60);
+    fl::AuthTracker tracker(5, 60);
     for (int i = 0; i < 5; ++i)
         tracker.recordFailure("1.2.3.4");
     CHECK(tracker.isLockedOut("1.2.3.4"));
@@ -214,7 +214,7 @@ TEST_CASE("AuthTracker: recordSuccess does not clear an active lockout", "[rcon]
 }
 
 TEST_CASE("AuthTracker: after lockout expiry failure counter restarts from zero", "[rcon][auth_tracker]") {
-    rcon::AuthTracker tracker(5, 60);
+    fl::AuthTracker tracker(5, 60);
     SteadyTp now{};
     tracker.setClockOverride([&now] { return now; });
     for (int i = 0; i < 5; ++i)
@@ -227,7 +227,7 @@ TEST_CASE("AuthTracker: after lockout expiry failure counter restarts from zero"
 }
 
 TEST_CASE("AuthTracker: multiple IPs tracked independently", "[rcon][auth_tracker]") {
-    rcon::AuthTracker tracker(5, 60);
+    fl::AuthTracker tracker(5, 60);
     for (int i = 0; i < 4; ++i) {
         tracker.recordFailure("10.0.0.1");
         tracker.recordFailure("10.0.0.2");
@@ -240,7 +240,7 @@ TEST_CASE("AuthTracker: multiple IPs tracked independently", "[rcon][auth_tracke
 }
 
 TEST_CASE("AuthTracker: failure counter persists across reconnects", "[rcon][auth_tracker]") {
-    rcon::AuthTracker tracker(5, 60);
+    fl::AuthTracker tracker(5, 60);
     for (int i = 0; i < 3; ++i)
         tracker.recordFailure("1.2.3.4");
     CHECK_FALSE(tracker.isLockedOut("1.2.3.4"));
@@ -250,7 +250,7 @@ TEST_CASE("AuthTracker: failure counter persists across reconnects", "[rcon][aut
 }
 
 TEST_CASE("AuthTracker: pruneExpired removes expired entry", "[rcon][auth_tracker]") {
-    rcon::AuthTracker tracker(5, 60);
+    fl::AuthTracker tracker(5, 60);
     SteadyTp now{};
     tracker.setClockOverride([&now] { return now; });
     for (int i = 0; i < 5; ++i)

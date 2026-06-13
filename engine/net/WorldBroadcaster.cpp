@@ -110,7 +110,8 @@ void WorldBroadcaster::setMaxConnectionsPerIp(int max) noexcept {
 }
 
 void WorldBroadcaster::setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn) {
-    m_now = std::move(fn);
+    m_now = fn;
+    m_adminAuthTracker.setClockOverride(std::move(fn));
 }
 
 void WorldBroadcaster::setMotd(std::string motd) {
@@ -127,6 +128,11 @@ void WorldBroadcaster::setOperatorPassword(std::string password) {
 
 void WorldBroadcaster::setAdminDispatch(std::function<std::string(std::string_view)> fn) {
     m_adminDispatch = std::move(fn);
+}
+
+void WorldBroadcaster::setAdminAuthParams(int maxFailures, int lockoutSeconds) {
+    m_adminAuthTracker = AuthTracker(maxFailures, lockoutSeconds);
+    m_adminAuthTracker.setClockOverride(m_now);
 }
 
 void WorldBroadcaster::forEachPeer(
@@ -151,6 +157,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             else
                 ++it;
         }
+        m_adminAuthTracker.pruneExpired();
     }
 
     // Step each peer's FlightIntegrator from stored inputs, then copy state to the entity.
@@ -357,6 +364,16 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
         }
     }
 
+    // Admin auth lockout — refuse reconnections from IPs with an active lockout.
+    if (!ip.empty() && m_adminAuthTracker.isLockedOut(ip)) {
+        char msg[128];
+        std::snprintf(msg, sizeof(msg), "peer %u from %s: connection refused — admin auth lockout active", peerId,
+                      ip.c_str());
+        m_logger.log(LogLevel::Warn, __FILE__, __LINE__, msg);
+        m_net.disconnectPeer(peerId);
+        return;
+    }
+
     char msg[64];
     std::snprintf(msg, sizeof(msg), "peer %u connected", peerId);
     m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
@@ -477,6 +494,9 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         if (size < sizeof(MsgAdminCommand))
             return;
 
+        // Extract IP once — used for both failure and success tracking below.
+        std::string adminIp = extractIp(m_net.getPeerAddress(peerId));
+
         MsgAdminCommand msg;
         std::memcpy(&msg, data, sizeof(msg));
         msg.token[sizeof(msg.token) - 1] = '\0';
@@ -498,6 +518,13 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
                 char lmsg[96];
                 std::snprintf(lmsg, sizeof(lmsg), "peer %u: MsgAdminCommand bad token — discarding", peerId);
                 m_logger.log(LogLevel::Warn, __FILE__, __LINE__, lmsg);
+                if (!adminIp.empty() && m_adminAuthTracker.recordFailure(adminIp)) {
+                    char lk[128];
+                    std::snprintf(lk, sizeof(lk), "peer %u (%s): admin auth lockout triggered — kicking", peerId,
+                                  adminIp.c_str());
+                    m_logger.log(LogLevel::Warn, __FILE__, __LINE__, lk);
+                    m_net.disconnectPeer(peerId);
+                }
                 return;
             }
         }
@@ -509,6 +536,8 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         // Dispatch on the sim thread (same as stdin admin loop).
         // Mutating commands enqueue via gameLoop.enqueueSimCallback() internally.
         std::string result = m_adminDispatch(cmdView);
+        if (!adminIp.empty())
+            m_adminAuthTracker.recordSuccess(adminIp);
 
         {
             char lmsg[256];

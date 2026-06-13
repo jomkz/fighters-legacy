@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "AuthTracker.h"
 #include "INetwork.h"
 #include "entity/EntityId.h"
 #include "loop/ISimUpdate.h"
@@ -170,6 +171,12 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Call before gameLoop.start(). Does not take ownership.
     void setAdminDispatch(std::function<std::string(std::string_view)> fn);
 
+    // Configure per-IP failed-auth lockout for the operator network admin channel.
+    // After maxFailures consecutive wrong passwords from the same IP the peer is kicked
+    // and reconnections from that IP are refused for lockoutSeconds seconds.
+    // Call before gameLoop.start().
+    void setAdminAuthParams(int maxFailures, int lockoutSeconds);
+
   private:
     void sendConnectAck(uint32_t peerId, EntityId assigned);
     void stepFlightSim(FlightIntegrator& fi, EntityState& state, const PeerInputState& inp, double simDt);
@@ -225,6 +232,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Network admin channel state (set before gameLoop.start(); read on sim thread only).
     std::string m_operatorPassword;                               // empty = admin channel disabled
     std::function<std::string(std::string_view)> m_adminDispatch; // null = admin channel disabled
+    AuthTracker m_adminAuthTracker{5, 300}; // per-IP failed-auth lockout (defaults: 5 attempts, 5 min)
 
     // Shutdown countdown state (sim-thread only).
     bool m_shuttingDown{false};

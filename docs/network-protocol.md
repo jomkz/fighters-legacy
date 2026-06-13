@@ -185,6 +185,13 @@ a constant-time comparison of the `token` field against the configured `operator
 is dispatched through the server's admin registry. On failure the packet is silently discarded
 and a Warn is logged.
 
+**Per-IP brute-force protection:** consecutive authentication failures from the same IP
+are counted. After `admin_auth_max_failures` consecutive failures (default 5) the peer is
+kicked and reconnections from that IP are refused for `admin_auth_lockout_s` seconds (default
+300). The failure counter is IP-keyed and persists across disconnect/reconnect. A successful
+authentication clears the counter for that IP. See `docs/fl-server-config.md` for the
+configurable thresholds.
+
 `MsgId::AdminCommand = 0x06` is an additive message ID — servers that do not recognize it
 silently discard without error. `kProtocolVersion` is **not** bumped.
 
