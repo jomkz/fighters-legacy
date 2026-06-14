@@ -59,6 +59,36 @@ static void quatRotate(const float q[4], const float v[3], float out[3]) {
     out[2] = v[2] + 2.f * q[3] * tz + 2.f * (q[0] * ty - q[1] * tx);
 }
 
+// ---------------------------------------------------------------------------
+// Connection-rejection reason table — one place mapping each ConnectRefusalCode
+// to the client-facing reason text and the server-side log phrase/level.
+// ---------------------------------------------------------------------------
+namespace {
+struct RejectInfo {
+    const char* reason;    // sent to the client in MsgConnectRefusal
+    const char* logPhrase; // context logged server-side
+    LogLevel level;
+};
+RejectInfo rejectInfoFor(fl::ConnectRefusalCode code) {
+    using C = fl::ConnectRefusalCode;
+    switch (code) {
+    case C::Banned:
+        return {"You are banned from this server.", "banned", LogLevel::Info};
+    case C::AccessDenied:
+        return {"Access denied.", "not on allowlist", LogLevel::Info};
+    case C::RateLimited:
+        return {"Connection rate limit exceeded. Try again later.", "rate-limited", LogLevel::Info};
+    case C::TooManyConnections:
+        return {"Too many connections from your address.", "too many connections from this address", LogLevel::Info};
+    case C::AdminLockout:
+        return {"Access denied.", "admin auth lockout active", LogLevel::Warn};
+    case C::Generic:
+        break;
+    }
+    return {"Access denied.", "access denied", LogLevel::Info};
+}
+} // namespace
+
 namespace fl {
 
 WorldBroadcaster::WorldBroadcaster(EntityManager& entityManager, EntityTypeRegistry& registry, INetwork& net,
@@ -151,6 +181,15 @@ void WorldBroadcaster::setAdminDispatch(std::function<std::string(std::string_vi
 void WorldBroadcaster::setAdminAuthParams(int maxFailures, int lockoutSeconds) {
     m_adminAuthTracker = AuthTracker(maxFailures, lockoutSeconds);
     m_adminAuthTracker.setClockOverride(m_now);
+}
+
+void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
+    setRateLimitParams(cfg.connectRateLimit, cfg.connectRateWindowS, cfg.floodMultiplier);
+    setMaxConnectionsPerIp(cfg.maxConnectionsPerIp);
+    setAdminAuthParams(cfg.adminAuthMaxFailures, cfg.adminAuthLockoutSeconds);
+    setMotd(cfg.motd);
+    setMotdDisplaySeconds(cfg.motdDisplaySeconds);
+    setOperatorPassword(cfg.operatorPassword);
 }
 
 void WorldBroadcaster::forEachPeer(
@@ -329,24 +368,19 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
 }
 
 void WorldBroadcaster::onConnect(uint32_t peerId) {
-    // Ban check — reject banned IPs before any state is created.
+    // Rejection gauntlet — each check logs, sends a MsgConnectRefusal with the matching reason,
+    // and disconnects via rejectConnection(). Order matters: cheapest/most-decisive checks first.
     std::string ip = extractIp(m_net.getPeerAddress(peerId));
+
+    // Ban check — reject banned IPs before any state is created.
     if (!ip.empty() && m_bannedAddresses.count(ip)) {
-        char msg[128];
-        std::snprintf(msg, sizeof(msg), "peer %u from %s is banned — disconnecting", peerId, ip.c_str());
-        m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
-        sendConnectRefusal(peerId, ConnectRefusalCode::Banned, "You are banned from this server.");
-        m_net.disconnectPeer(peerId);
+        rejectConnection(peerId, ip, ConnectRefusalCode::Banned);
         return;
     }
 
     // Allowlist check — if non-empty, only listed IPs may connect.
     if (!ip.empty() && !m_allowedAddresses.empty() && !m_allowedAddresses.count(ip)) {
-        char msg[128];
-        std::snprintf(msg, sizeof(msg), "peer %u from %s not on allowlist — disconnecting", peerId, ip.c_str());
-        m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
-        sendConnectRefusal(peerId, ConnectRefusalCode::AccessDenied, "Access denied.");
-        m_net.disconnectPeer(peerId);
+        rejectConnection(peerId, ip, ConnectRefusalCode::AccessDenied);
         return;
     }
 
@@ -359,12 +393,7 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
             rec.timestamps.pop_front();
         rec.timestamps.push_back(now);
         if (static_cast<int>(rec.timestamps.size()) > m_connectRateLimit) {
-            char msg[128];
-            std::snprintf(msg, sizeof(msg), "peer %u from %s rate-limited — disconnecting", peerId, ip.c_str());
-            m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
-            sendConnectRefusal(peerId, ConnectRefusalCode::RateLimited,
-                               "Connection rate limit exceeded. Try again later.");
-            m_net.disconnectPeer(peerId);
+            rejectConnection(peerId, ip, ConnectRefusalCode::RateLimited);
             return;
         }
     }
@@ -376,25 +405,14 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
             if (extractIp(m_net.getPeerAddress(pid)) == ip)
                 ++count;
         if (count >= m_maxConnectionsPerIp) {
-            char msg[128];
-            std::snprintf(msg, sizeof(msg), "peer %u from %s exceeds per-IP connection limit (%d) -- disconnecting",
-                          peerId, ip.c_str(), m_maxConnectionsPerIp);
-            m_logger.log(LogLevel::Info, __FILE__, __LINE__, msg);
-            sendConnectRefusal(peerId, ConnectRefusalCode::TooManyConnections,
-                               "Too many connections from your address.");
-            m_net.disconnectPeer(peerId);
+            rejectConnection(peerId, ip, ConnectRefusalCode::TooManyConnections);
             return;
         }
     }
 
     // Admin auth lockout — refuse reconnections from IPs with an active lockout.
     if (!ip.empty() && m_adminAuthTracker.isLockedOut(ip)) {
-        char msg[128];
-        std::snprintf(msg, sizeof(msg), "peer %u from %s: connection refused — admin auth lockout active", peerId,
-                      ip.c_str());
-        m_logger.log(LogLevel::Warn, __FILE__, __LINE__, msg);
-        sendConnectRefusal(peerId, ConnectRefusalCode::AdminLockout, "Access denied.");
-        m_net.disconnectPeer(peerId);
+        rejectConnection(peerId, ip, ConnectRefusalCode::AdminLockout);
         return;
     }
 
@@ -661,6 +679,16 @@ void WorldBroadcaster::sendConnectRefusal(uint32_t peerId, ConnectRefusalCode co
     msg.code = static_cast<uint8_t>(code);
     std::snprintf(msg.reason, sizeof(msg.reason), "%s", reason);
     m_net.send(peerId, &msg, sizeof(msg), /*reliable=*/true);
+}
+
+void WorldBroadcaster::rejectConnection(uint32_t peerId, const std::string& ip, ConnectRefusalCode code) {
+    const RejectInfo info = rejectInfoFor(code);
+    char msg[160];
+    std::snprintf(msg, sizeof(msg), "peer %u from %s rejected (%s) -- disconnecting", peerId, ip.c_str(),
+                  info.logPhrase);
+    m_logger.log(info.level, __FILE__, __LINE__, msg);
+    sendConnectRefusal(peerId, code, info.reason);
+    m_net.disconnectPeer(peerId);
 }
 
 // ---------------------------------------------------------------------------

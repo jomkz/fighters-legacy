@@ -39,6 +39,22 @@ struct PeerInputState {
     uint8_t buttons{0};
 };
 
+// Pre-start scalar configuration. Bundles the init-time setters so callers configure rate limiting,
+// the per-IP cap, admin-auth lockout, MOTD, and the operator password in one applyConfig() call
+// instead of remembering six separate "call before gameLoop.start()" setters. The hot-reload setters
+// (setMotd, setBannedAddresses, setAllowedAddresses, ...) remain available for runtime changes.
+struct WorldBroadcasterConfig {
+    int connectRateLimit{5};          // max connects per window per IP
+    int connectRateWindowS{10};       // sliding-window length (seconds)
+    int floodMultiplier{3};           // MsgClientInput flood threshold multiplier
+    int maxConnectionsPerIp{0};       // simultaneous connections per IP; 0 = unlimited
+    int adminAuthMaxFailures{5};      // wrong operator passwords before per-IP lockout
+    int adminAuthLockoutSeconds{300}; // lockout duration (seconds)
+    std::string motd;                 // empty = no MOTD
+    uint16_t motdDisplaySeconds{0};   // 0 = client default
+    std::string operatorPassword;     // empty = network admin channel disabled
+};
+
 // Wraps EntityManager to provide a server-side ISimUpdate that:
 //   1. Advances each peer's FlightIntegrator from stored client inputs.
 //   2. Advances the entity simulation each tick (calls EntityManager::onTick).
@@ -187,9 +203,17 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Call before gameLoop.start().
     void setAdminAuthParams(int maxFailures, int lockoutSeconds);
 
+    // Apply all pre-start scalar configuration in one call (rate limiting, per-IP cap, admin-auth
+    // lockout, MOTD, operator password). Equivalent to the corresponding individual setters.
+    // Call before gameLoop.start(). The admin dispatcher (setAdminDispatch) is wired separately.
+    void applyConfig(const WorldBroadcasterConfig& cfg);
+
   private:
     void sendConnectAck(uint32_t peerId, EntityId assigned);
     void sendConnectRefusal(uint32_t peerId, ConnectRefusalCode code, const char* reason);
+    // Log, send a MsgConnectRefusal with the reason text for `code`, and disconnect the peer.
+    // Centralizes the five onConnect rejection paths.
+    void rejectConnection(uint32_t peerId, const std::string& ip, ConnectRefusalCode code);
     void stepFlightSim(FlightIntegrator& fi, EntityState& state, const PeerInputState& inp, double simDt);
     void broadcastShutdownNotice(uint16_t secsLeft, const char* text);
     static std::string makeShutdownMessage(uint32_t secsLeft, const std::string& reason = "");

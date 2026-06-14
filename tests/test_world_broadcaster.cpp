@@ -2137,6 +2137,30 @@ TEST_CASE("WorldBroadcaster: MOTD packet displaySeconds matches setMotdDisplaySe
     CHECK(secs == 45u);
 }
 
+TEST_CASE("WorldBroadcaster: applyConfig wires MOTD and display seconds in one call", "[world_broadcaster][motd]") {
+    MockLogger log;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:1234";
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(log, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, log);
+
+    fl::WorldBroadcasterConfig cfg;
+    cfg.motd = "Welcome via config!";
+    cfg.motdDisplaySeconds = 30u;
+    broadcaster.applyConfig(cfg);
+
+    broadcaster.onConnect(0u);
+
+    REQUIRE(net.sends.size() == 3u);
+    CHECK(net.sends[2][0] == static_cast<uint8_t>(fl::MsgId::Motd));
+    CHECK(parseMotdText(net.sends[2]) == "Welcome via config!");
+    uint16_t secs = 0;
+    std::memcpy(&secs, net.sends[2].data() + offsetof(fl::MsgMotdHeader, displaySeconds), sizeof(secs));
+    CHECK(secs == 30u);
+}
+
 // ---------------------------------------------------------------------------
 // Admin command helpers (existing)
 // ---------------------------------------------------------------------------
