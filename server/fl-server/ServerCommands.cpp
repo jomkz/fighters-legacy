@@ -169,17 +169,17 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     registry.registerCommand(
         "status", "status  -- show server state (uptime, peer count, entity count, tick rate)",
         [ctx](std::span<std::string_view>) -> std::string {
-            if (!ctx.broadcaster || !ctx.entityManager)
+            if (!ctx.sim.broadcaster || !ctx.sim.entityManager)
                 return "status: not available";
             using namespace std::chrono;
-            auto uptimeSec = duration_cast<seconds>(steady_clock::now() - ctx.startTime).count();
-            int peers = ctx.broadcaster->getPeerCount();
-            uint32_t entities = ctx.entityManager->liveCount();
+            auto uptimeSec = duration_cast<seconds>(steady_clock::now() - ctx.env.startTime).count();
+            int peers = ctx.sim.broadcaster->getPeerCount();
+            uint32_t entities = ctx.sim.entityManager->liveCount();
             char buf[256];
             std::snprintf(buf, sizeof(buf), "uptime: %llds  peers: %d  entities: %u  tick: 60 Hz",
                           static_cast<long long>(uptimeSec), peers, entities);
             std::string out(buf);
-            auto ls = ctx.broadcaster->getAuthLockoutSummary();
+            auto ls = ctx.sim.broadcaster->getAuthLockoutSummary();
             if (ls.activeCount > 0) {
                 char lbuf[96];
                 std::snprintf(lbuf, sizeof(lbuf),
@@ -192,28 +192,28 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     // peers
     registry.registerCommand("peers", "peers  -- list connected peers (peerId, address, entity index/generation)",
                              [ctx](std::span<std::string_view>) -> std::string {
-                                 if (!ctx.broadcaster || !ctx.gameLoop)
+                                 if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
                                      return "peers: not available";
-                                 ctx.gameLoop->enqueueSimCallback([ctx]() {
+                                 ctx.sim.gameLoop->enqueueSimCallback([ctx]() {
                                      int count = 0;
-                                     ctx.broadcaster->forEachPeer(
+                                     ctx.sim.broadcaster->forEachPeer(
                                          [&](uint32_t peerId, const std::string& addr, fl::EntityId eid) {
                                              char m[256];
                                              std::snprintf(m, sizeof(m), "[admin] peer %u  %s  entity=%u/%u", peerId,
                                                            addr.c_str(), eid.index, eid.generation);
                                              std::printf("%s\n", m);
-                                             if (ctx.shell)
-                                                 ctx.shell->print(m);
+                                             if (ctx.rcon.shell)
+                                                 ctx.rcon.shell->print(m);
                                              ++count;
                                          });
                                      if (count == 0) {
                                          std::printf("[admin] peers: no connected peers\n");
-                                         if (ctx.shell)
-                                             ctx.shell->print("[admin] peers: no connected peers");
+                                         if (ctx.rcon.shell)
+                                             ctx.rcon.shell->print("[admin] peers: no connected peers");
                                      }
                                      std::fflush(stdout);
                                  });
-                                 int count = ctx.broadcaster->getPeerCount();
+                                 int count = ctx.sim.broadcaster->getPeerCount();
                                  char peerBuf[64];
                                  std::snprintf(peerBuf, sizeof(peerBuf), "%d peer(s) connected", count);
                                  return std::string(peerBuf);
@@ -225,7 +225,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         [ctx](std::span<std::string_view> args) -> std::string {
             if (args.empty())
                 return "usage: kick <peerId|IP>";
-            if (!ctx.broadcaster || !ctx.gameLoop)
+            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
                 return "kick: not available";
             std::string arg(args[0]);
             if (isNumeric(arg)) {
@@ -233,13 +233,13 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                 auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), peerId);
                 if (ec != std::errc{})
                     return "kick: invalid peer ID";
-                ctx.gameLoop->enqueueSimCallback([ctx, peerId]() {
-                    ctx.broadcaster->kickPeer(peerId);
+                ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId]() {
+                    ctx.sim.broadcaster->kickPeer(peerId);
                     char m[64];
                     std::snprintf(m, sizeof(m), "[admin] kicked peer %u", peerId);
                     std::printf("%s\n", m);
-                    if (ctx.shell)
-                        ctx.shell->print(m);
+                    if (ctx.rcon.shell)
+                        ctx.rcon.shell->print(m);
                     std::fflush(stdout);
                 });
                 char kickBuf[64];
@@ -247,19 +247,19 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                 return std::string(kickBuf);
             } else {
                 std::string ip = normalizeIp(arg);
-                ctx.gameLoop->enqueueSimCallback([ctx, ip]() {
+                ctx.sim.gameLoop->enqueueSimCallback([ctx, ip]() {
                     int kicked = 0;
-                    ctx.broadcaster->forEachPeer([&](uint32_t peerId, const std::string& addr, fl::EntityId) {
+                    ctx.sim.broadcaster->forEachPeer([&](uint32_t peerId, const std::string& addr, fl::EntityId) {
                         if (extractIp(addr) == ip) {
-                            ctx.broadcaster->kickPeer(peerId);
+                            ctx.sim.broadcaster->kickPeer(peerId);
                             ++kicked;
                         }
                     });
                     char m[128];
                     std::snprintf(m, sizeof(m), "[admin] kicked %d peer(s) from IP %s", kicked, ip.c_str());
                     std::printf("%s\n", m);
-                    if (ctx.shell)
-                        ctx.shell->print(m);
+                    if (ctx.rcon.shell)
+                        ctx.rcon.shell->print(m);
                     std::fflush(stdout);
                 });
                 return "kick: queued peers from IP " + ip;
@@ -272,7 +272,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         [ctx](std::span<std::string_view> args) -> std::string {
             if (args.empty())
                 return "usage: ban <peerId|IP>";
-            if (!ctx.broadcaster || !ctx.gameLoop)
+            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
                 return "ban: not available";
             std::string arg(args[0]);
             if (isNumeric(arg)) {
@@ -280,9 +280,9 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                 auto [ptr, ec] = std::from_chars(arg.data(), arg.data() + arg.size(), peerId);
                 if (ec != std::errc{})
                     return "ban: invalid peer ID";
-                ctx.gameLoop->enqueueSimCallback([ctx, peerId]() {
+                ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId]() {
                     std::string foundIp;
-                    ctx.broadcaster->forEachPeer([&](uint32_t pid, const std::string& addr, fl::EntityId) {
+                    ctx.sim.broadcaster->forEachPeer([&](uint32_t pid, const std::string& addr, fl::EntityId) {
                         if (pid == peerId)
                             foundIp = extractIp(addr);
                     });
@@ -290,14 +290,14 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                     if (foundIp.empty()) {
                         std::snprintf(m, sizeof(m), "[admin] ban: peer %u not found", peerId);
                     } else {
-                        ctx.broadcaster->banAddress(foundIp);
-                        if (ctx.saveBanlist)
-                            ctx.saveBanlist(ctx.broadcaster->getBannedAddresses());
+                        ctx.sim.broadcaster->banAddress(foundIp);
+                        if (ctx.bans.saveBanlist)
+                            ctx.bans.saveBanlist(ctx.sim.broadcaster->getBannedAddresses());
                         std::snprintf(m, sizeof(m), "[admin] banned IP %s (peer %u)", foundIp.c_str(), peerId);
                     }
                     std::printf("%s\n", m);
-                    if (ctx.shell)
-                        ctx.shell->print(m);
+                    if (ctx.rcon.shell)
+                        ctx.rcon.shell->print(m);
                     std::fflush(stdout);
                 });
                 char banBuf[64];
@@ -305,15 +305,15 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                 return std::string(banBuf);
             } else {
                 std::string ip = normalizeIp(arg);
-                ctx.gameLoop->enqueueSimCallback([ctx, ip]() {
-                    ctx.broadcaster->banAddress(ip);
-                    if (ctx.saveBanlist)
-                        ctx.saveBanlist(ctx.broadcaster->getBannedAddresses());
+                ctx.sim.gameLoop->enqueueSimCallback([ctx, ip]() {
+                    ctx.sim.broadcaster->banAddress(ip);
+                    if (ctx.bans.saveBanlist)
+                        ctx.bans.saveBanlist(ctx.sim.broadcaster->getBannedAddresses());
                     char m[128];
                     std::snprintf(m, sizeof(m), "[admin] banned IP %s", ip.c_str());
                     std::printf("%s\n", m);
-                    if (ctx.shell)
-                        ctx.shell->print(m);
+                    if (ctx.rcon.shell)
+                        ctx.rcon.shell->print(m);
                     std::fflush(stdout);
                 });
                 return "ban: banning IP " + ip;
@@ -325,18 +325,18 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                              [ctx](std::span<std::string_view> args) -> std::string {
                                  if (args.empty())
                                      return "usage: unban <IP>";
-                                 if (!ctx.broadcaster || !ctx.gameLoop)
+                                 if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
                                      return "unban: not available";
                                  std::string ip = normalizeIp(args[0]);
-                                 ctx.gameLoop->enqueueSimCallback([ctx, ip]() {
-                                     ctx.broadcaster->unbanAddress(ip);
-                                     if (ctx.saveBanlist)
-                                         ctx.saveBanlist(ctx.broadcaster->getBannedAddresses());
+                                 ctx.sim.gameLoop->enqueueSimCallback([ctx, ip]() {
+                                     ctx.sim.broadcaster->unbanAddress(ip);
+                                     if (ctx.bans.saveBanlist)
+                                         ctx.bans.saveBanlist(ctx.sim.broadcaster->getBannedAddresses());
                                      char m[128];
                                      std::snprintf(m, sizeof(m), "[admin] unbanned IP %s", ip.c_str());
                                      std::printf("%s\n", m);
-                                     if (ctx.shell)
-                                         ctx.shell->print(m);
+                                     if (ctx.rcon.shell)
+                                         ctx.rcon.shell->print(m);
                                      std::fflush(stdout);
                                  });
                                  return "unban: unbanning IP " + ip;
@@ -348,16 +348,16 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         [ctx](std::span<std::string_view> args) -> std::string {
             if (args.empty())
                 return "usage: admin_unlock <IP>";
-            if (!ctx.broadcaster || !ctx.gameLoop)
+            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
                 return "admin_unlock: not available";
             std::string ip = normalizeIp(args[0]);
-            ctx.gameLoop->enqueueSimCallback([ctx, ip]() {
-                bool adminWasLocked = ctx.broadcaster->unlockAdminAuth(ip);
-                bool rconWasLocked = ctx.clearRconLockout ? ctx.clearRconLockout(ip) : false;
+            ctx.sim.gameLoop->enqueueSimCallback([ctx, ip]() {
+                bool adminWasLocked = ctx.sim.broadcaster->unlockAdminAuth(ip);
+                bool rconWasLocked = ctx.rcon.clearRconLockout ? ctx.rcon.clearRconLockout(ip) : false;
                 bool anyWasLocked = adminWasLocked || rconWasLocked;
                 char m[128];
                 if (anyWasLocked) {
-                    if (ctx.clearRconLockout)
+                    if (ctx.rcon.clearRconLockout)
                         std::snprintf(m, sizeof(m), "[admin] unlocked %s (admin + RCON)", ip.c_str());
                     else
                         std::snprintf(m, sizeof(m), "[admin] unlocked %s", ip.c_str());
@@ -365,8 +365,8 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                     std::snprintf(m, sizeof(m), "[admin] admin_unlock: %s was not locked", ip.c_str());
                 }
                 std::printf("%s\n", m);
-                if (ctx.shell)
-                    ctx.shell->print(m);
+                if (ctx.rcon.shell)
+                    ctx.rcon.shell->print(m);
                 std::fflush(stdout);
             });
             return "admin_unlock: queued for " + ip;
@@ -376,18 +376,18 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     registry.registerCommand("admin_auth_status",
                              "admin_auth_status  -- show per-IP auth lockout state for admin and RCON channels",
                              [ctx](std::span<std::string_view>) -> std::string {
-                                 if (!ctx.broadcaster)
+                                 if (!ctx.sim.broadcaster)
                                      return "admin_auth_status: not available";
-                                 auto adminS = ctx.broadcaster->getAuthLockoutSummary();
-                                 bool hasRcon = static_cast<bool>(ctx.getRconAuthSummary);
-                                 auto rconS = hasRcon ? ctx.getRconAuthSummary() : fl::AuthLockoutSummary{};
+                                 auto adminS = ctx.sim.broadcaster->getAuthLockoutSummary();
+                                 bool hasRcon = static_cast<bool>(ctx.rcon.getRconAuthSummary);
+                                 auto rconS = hasRcon ? ctx.rcon.getRconAuthSummary() : fl::AuthLockoutSummary{};
 
-                                 printAuthSection("MsgAdminCommand channel", adminS, ctx.shell);
+                                 printAuthSection("MsgAdminCommand channel", adminS, ctx.rcon.shell);
                                  if (hasRcon) {
                                      std::printf("\n");
-                                     if (ctx.shell)
-                                         ctx.shell->print("");
-                                     printAuthSection("RCON channel", rconS, ctx.shell);
+                                     if (ctx.rcon.shell)
+                                         ctx.rcon.shell->print("");
+                                     printAuthSection("RCON channel", rconS, ctx.rcon.shell);
                                  }
                                  std::fflush(stdout);
 
@@ -406,7 +406,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         [ctx](std::span<std::string_view> args) -> std::string {
             if (args.empty())
                 return "usage: set_weather <clear|partly_cloudy|overcast|rain|storm>";
-            if (!ctx.weatherController || !ctx.gameLoop)
+            if (!ctx.sim.weatherController || !ctx.sim.gameLoop)
                 return "set_weather: not available";
             fl::WeatherPreset preset;
             if (args[0] == "clear")
@@ -421,7 +421,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                 preset = fl::WeatherPreset::Storm;
             else
                 return "set_weather: unknown preset (clear|partly_cloudy|overcast|rain|storm)";
-            ctx.gameLoop->enqueueSimCallback([ctx, preset]() { ctx.weatherController->setPreset(preset); });
+            ctx.sim.gameLoop->enqueueSimCallback([ctx, preset]() { ctx.sim.weatherController->setPreset(preset); });
             return std::string("set_weather: ") + std::string(args[0]);
         });
 
@@ -441,10 +441,10 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                      return "set_time: invalid value";
                                  if (hours < 0.f || hours > 24.f)
                                      return "set_time: value must be in [0, 24]";
-                                 if (!ctx.weatherController || !ctx.gameLoop)
+                                 if (!ctx.sim.weatherController || !ctx.sim.gameLoop)
                                      return "set_time: not available";
-                                 ctx.gameLoop->enqueueSimCallback(
-                                     [ctx, hours]() { ctx.weatherController->setTimeOfDay(hours); });
+                                 ctx.sim.gameLoop->enqueueSimCallback(
+                                     [ctx, hours]() { ctx.sim.weatherController->setTimeOfDay(hours); });
                                  char buf[64];
                                  std::snprintf(buf, sizeof(buf), "set_time: %.2f", hours);
                                  return buf;
@@ -456,7 +456,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         [ctx](std::span<std::string_view> args) -> std::string {
             if (args.size() < 4)
                 return "usage: spawn <type> <x> <y> <z>";
-            if (!ctx.entityManager || !ctx.gameLoop)
+            if (!ctx.sim.entityManager || !ctx.sim.gameLoop)
                 return "spawn: not available";
             std::string typeId(args[0]);
             double x = 0, y = 0, z = 0;
@@ -472,12 +472,12 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
             };
             if (!parseD(args[1], x) || !parseD(args[2], y) || !parseD(args[3], z))
                 return "spawn: invalid coordinates";
-            ctx.gameLoop->enqueueSimCallback([ctx, typeId, x, y, z]() {
+            ctx.sim.gameLoop->enqueueSimCallback([ctx, typeId, x, y, z]() {
                 fl::EntityTransform t{};
                 t.pos[0] = x;
                 t.pos[1] = y;
                 t.pos[2] = z;
-                fl::EntityId id = ctx.entityManager->spawn(typeId.c_str(), t);
+                fl::EntityId id = ctx.sim.entityManager->spawn(typeId.c_str(), t);
                 char m[128];
                 if (id.valid())
                     std::snprintf(m, sizeof(m), "[admin] spawned %s entity=%u/%u", typeId.c_str(), id.index,
@@ -485,8 +485,8 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                 else
                     std::snprintf(m, sizeof(m), "[admin] spawn: type '%s' unknown or cap reached", typeId.c_str());
                 std::printf("%s\n", m);
-                if (ctx.shell)
-                    ctx.shell->print(m);
+                if (ctx.rcon.shell)
+                    ctx.rcon.shell->print(m);
                 std::fflush(stdout);
             });
             char spawnBuf[128];
@@ -501,28 +501,28 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         [ctx](std::span<std::string_view> args) -> std::string {
             if (args.empty())
                 return "usage: kill <idx>";
-            if (!ctx.entityManager || !ctx.gameLoop)
+            if (!ctx.sim.entityManager || !ctx.sim.gameLoop)
                 return "kill: not available";
             uint32_t targetIdx = 0;
             auto [ptr, ec] = std::from_chars(args[0].data(), args[0].data() + args[0].size(), targetIdx);
             if (ec != std::errc{})
                 return "kill: invalid index";
-            ctx.gameLoop->enqueueSimCallback([ctx, targetIdx]() {
+            ctx.sim.gameLoop->enqueueSimCallback([ctx, targetIdx]() {
                 fl::EntityId killId;
-                ctx.entityManager->forEach([&](const fl::EntityState& state) {
+                ctx.sim.entityManager->forEach([&](const fl::EntityState& state) {
                     if (!killId.valid() && state.id.index == targetIdx)
                         killId = state.id;
                 });
                 char m[128];
                 if (killId.valid()) {
-                    ctx.entityManager->kill(killId);
+                    ctx.sim.entityManager->kill(killId);
                     std::snprintf(m, sizeof(m), "[admin] killed entity %u/%u", killId.index, killId.generation);
                 } else {
                     std::snprintf(m, sizeof(m), "[admin] kill: no live entity with index %u", targetIdx);
                 }
                 std::printf("%s\n", m);
-                if (ctx.shell)
-                    ctx.shell->print(m);
+                if (ctx.rcon.shell)
+                    ctx.rcon.shell->print(m);
                 std::fflush(stdout);
             });
             char killBuf[64];
@@ -536,7 +536,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         [ctx](std::span<std::string_view> args) -> std::string {
             if (args.size() < 4)
                 return "usage: tp <idx> <x> <y> <z>";
-            if (!ctx.entityManager || !ctx.gameLoop)
+            if (!ctx.sim.entityManager || !ctx.sim.gameLoop)
                 return "tp: not available";
             uint32_t targetIdx = 0;
             auto [ptr, ec] = std::from_chars(args[0].data(), args[0].data() + args[0].size(), targetIdx);
@@ -554,8 +554,8 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
             double x{}, y{}, z{};
             if (!parseCoord(args[1], x) || !parseCoord(args[2], y) || !parseCoord(args[3], z))
                 return "tp: invalid coordinates";
-            ctx.gameLoop->enqueueSimCallback([ctx, targetIdx, x, y, z]() {
-                ctx.entityManager->forEach([&](fl::EntityState& state) {
+            ctx.sim.gameLoop->enqueueSimCallback([ctx, targetIdx, x, y, z]() {
+                ctx.sim.entityManager->forEach([&](fl::EntityState& state) {
                     if (state.id.index == targetIdx) {
                         state.transform.pos[0] = x;
                         state.transform.pos[1] = y;
@@ -565,8 +565,8 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                       state.id.index, state.id.generation, static_cast<float>(x), static_cast<float>(y),
                                       static_cast<float>(z));
                         std::printf("%s\n", m);
-                        if (ctx.shell)
-                            ctx.shell->print(m);
+                        if (ctx.rcon.shell)
+                            ctx.rcon.shell->print(m);
                         std::fflush(stdout);
                     }
                 });
@@ -582,22 +582,22 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         "reload_config",
         "reload_config  -- re-read server.toml and apply: name (beacon), motd, motd_display_s (new connections)",
         [ctx](std::span<std::string_view>) -> std::string {
-            if (!ctx.configPath || ctx.configPath->empty())
+            if (!ctx.env.configPath || ctx.env.configPath->empty())
                 return "reload_config: not available";
-            std::ifstream f(*ctx.configPath);
+            std::ifstream f(*ctx.env.configPath);
             if (!f)
-                return "reload_config: cannot open " + *ctx.configPath;
+                return "reload_config: cannot open " + *ctx.env.configPath;
             std::ostringstream ss;
             ss << f.rdbuf();
-            ServerConfig newCfg = parseServerConfig(ss.str(), ctx.logger);
-            if (ctx.beacon)
-                ctx.beacon->setName(newCfg.name);
-            if (ctx.broadcaster && ctx.gameLoop) {
+            ServerConfig newCfg = parseServerConfig(ss.str(), ctx.env.logger);
+            if (ctx.env.beacon)
+                ctx.env.beacon->setName(newCfg.name);
+            if (ctx.sim.broadcaster && ctx.sim.gameLoop) {
                 auto newMotd = newCfg.motd;
                 auto newMotdDisplayS = newCfg.motdDisplayS;
-                ctx.gameLoop->enqueueSimCallback([ctx, newMotd, newMotdDisplayS]() mutable {
-                    ctx.broadcaster->setMotd(std::move(newMotd));
-                    ctx.broadcaster->setMotdDisplaySeconds(newMotdDisplayS);
+                ctx.sim.gameLoop->enqueueSimCallback([ctx, newMotd, newMotdDisplayS]() mutable {
+                    ctx.sim.broadcaster->setMotd(std::move(newMotd));
+                    ctx.sim.broadcaster->setMotdDisplaySeconds(newMotdDisplayS);
                 });
             }
             return "reload_config: name=\"" + newCfg.name + "\"  motd=\"" + newCfg.motd +
@@ -605,47 +605,48 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         });
 
     // reload_banlist
-    registry.registerCommand(
-        "reload_banlist", "reload_banlist  -- reload ban list from security.banlist_path in server.toml",
-        [ctx](std::span<std::string_view>) -> std::string {
-            if (!ctx.banlistPath || ctx.banlistPath->empty())
-                return "reload_banlist: not available (security.banlist_path not configured)";
-            if (!ctx.broadcaster || !ctx.gameLoop || !ctx.loadBanlist)
-                return "reload_banlist: not available";
-            auto banned = ctx.loadBanlist();
-            auto count = banned.size();
-            ctx.gameLoop->enqueueSimCallback([ctx, b = std::move(banned)]() mutable {
-                ctx.broadcaster->setBannedAddresses(std::move(b));
-                std::printf("[admin] reload_banlist: applied\n");
-                if (ctx.shell)
-                    ctx.shell->print("[admin] reload_banlist: applied");
-                std::fflush(stdout);
-            });
-            char buf[128];
-            std::snprintf(buf, sizeof(buf), "reload_banlist: loading %zu IPs from %s", count, ctx.banlistPath->c_str());
-            return buf;
-        });
+    registry.registerCommand("reload_banlist",
+                             "reload_banlist  -- reload ban list from security.banlist_path in server.toml",
+                             [ctx](std::span<std::string_view>) -> std::string {
+                                 if (!ctx.bans.banlistPath || ctx.bans.banlistPath->empty())
+                                     return "reload_banlist: not available (security.banlist_path not configured)";
+                                 if (!ctx.sim.broadcaster || !ctx.sim.gameLoop || !ctx.bans.loadBanlist)
+                                     return "reload_banlist: not available";
+                                 auto banned = ctx.bans.loadBanlist();
+                                 auto count = banned.size();
+                                 ctx.sim.gameLoop->enqueueSimCallback([ctx, b = std::move(banned)]() mutable {
+                                     ctx.sim.broadcaster->setBannedAddresses(std::move(b));
+                                     std::printf("[admin] reload_banlist: applied\n");
+                                     if (ctx.rcon.shell)
+                                         ctx.rcon.shell->print("[admin] reload_banlist: applied");
+                                     std::fflush(stdout);
+                                 });
+                                 char buf[128];
+                                 std::snprintf(buf, sizeof(buf), "reload_banlist: loading %zu IPs from %s", count,
+                                               ctx.bans.banlistPath->c_str());
+                                 return buf;
+                             });
 
     // reload_allowlist
     registry.registerCommand("reload_allowlist",
                              "reload_allowlist  -- reload allowlist from security.allowlist_path in server.toml",
                              [ctx](std::span<std::string_view>) -> std::string {
-                                 if (!ctx.allowlistPath || ctx.allowlistPath->empty())
+                                 if (!ctx.bans.allowlistPath || ctx.bans.allowlistPath->empty())
                                      return "reload_allowlist: not available (security.allowlist_path not configured)";
-                                 if (!ctx.broadcaster || !ctx.gameLoop || !ctx.loadAllowlist)
+                                 if (!ctx.sim.broadcaster || !ctx.sim.gameLoop || !ctx.bans.loadAllowlist)
                                      return "reload_allowlist: not available";
-                                 auto allowed = ctx.loadAllowlist();
+                                 auto allowed = ctx.bans.loadAllowlist();
                                  auto count = allowed.size();
-                                 ctx.gameLoop->enqueueSimCallback([ctx, a = std::move(allowed)]() mutable {
-                                     ctx.broadcaster->setAllowedAddresses(std::move(a));
+                                 ctx.sim.gameLoop->enqueueSimCallback([ctx, a = std::move(allowed)]() mutable {
+                                     ctx.sim.broadcaster->setAllowedAddresses(std::move(a));
                                      std::printf("[admin] reload_allowlist: applied\n");
-                                     if (ctx.shell)
-                                         ctx.shell->print("[admin] reload_allowlist: applied");
+                                     if (ctx.rcon.shell)
+                                         ctx.rcon.shell->print("[admin] reload_allowlist: applied");
                                      std::fflush(stdout);
                                  });
                                  char buf[128];
                                  std::snprintf(buf, sizeof(buf), "reload_allowlist: loading %zu IPs from %s", count,
-                                               ctx.allowlistPath->c_str());
+                                               ctx.bans.allowlistPath->c_str());
                                  return buf;
                              });
 
@@ -657,7 +658,7 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         "  -- schedule/cancel fl-server graceful shutdown with countdown notices;"
         " --reason prepends custom text to each broadcast (stops consuming at next -- flag)",
         [ctx](std::span<std::string_view> args) -> std::string {
-            if (!ctx.broadcaster || !ctx.gameLoop)
+            if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
                 return "shutdown: not available";
 
             // Parse flags.
@@ -710,17 +711,17 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
 
             // No args → show status (enqueue sim-thread read).
             if (!flagCancel && !flagNow && !flagIn && !flagDelay) {
-                ctx.gameLoop->enqueueSimCallback([ctx]() {
+                ctx.sim.gameLoop->enqueueSimCallback([ctx]() {
                     char m[128];
-                    if (ctx.broadcaster->isShuttingDown()) {
-                        uint32_t secs = ctx.broadcaster->secondsUntilShutdown();
+                    if (ctx.sim.broadcaster->isShuttingDown()) {
+                        uint32_t secs = ctx.sim.broadcaster->secondsUntilShutdown();
                         std::snprintf(m, sizeof(m), "[admin] shutdown scheduled in %u seconds", secs);
                     } else {
                         std::snprintf(m, sizeof(m), "[admin] no shutdown scheduled");
                     }
                     std::printf("%s\n", m);
-                    if (ctx.shell)
-                        ctx.shell->print(m);
+                    if (ctx.rcon.shell)
+                        ctx.rcon.shell->print(m);
                     std::fflush(stdout);
                 });
                 return "shutdown: status queued";
@@ -728,29 +729,29 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
 
             // --cancel
             if (flagCancel) {
-                ctx.gameLoop->enqueueSimCallback([ctx]() { ctx.broadcaster->cancelShutdown(); });
+                ctx.sim.gameLoop->enqueueSimCallback([ctx]() { ctx.sim.broadcaster->cancelShutdown(); });
                 return "shutdown: cancelled";
             }
 
             // --delay (push back existing shutdown)
             if (flagDelay) {
                 uint32_t extra = *flagDelay;
-                ctx.gameLoop->enqueueSimCallback([ctx, extra]() {
+                ctx.sim.gameLoop->enqueueSimCallback([ctx, extra]() {
                     char m[128];
-                    if (!ctx.broadcaster->extendShutdown(extra))
+                    if (!ctx.sim.broadcaster->extendShutdown(extra))
                         std::snprintf(m, sizeof(m), "[admin] shutdown --delay: no active shutdown");
                     else
                         std::snprintf(m, sizeof(m), "[admin] shutdown delayed by %u seconds", extra);
                     std::printf("%s\n", m);
-                    if (ctx.shell)
-                        ctx.shell->print(m);
+                    if (ctx.rcon.shell)
+                        ctx.rcon.shell->print(m);
                     std::fflush(stdout);
                 });
                 return "shutdown: extension queued";
             }
 
             // --now or --in: confirmation gate.
-            if (ctx.shutdownRequireConfirm && !flagForce) {
+            if (ctx.shutdown.requireConfirm && !flagForce) {
                 if (flagNow)
                     return "Server will shut down immediately. Re-run with --force to confirm.";
                 uint32_t secs = *flagIn;
@@ -766,19 +767,19 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
             }
 
             // Enforce minimum delay (--now bypasses this).
-            if (flagIn && *flagIn < ctx.minShutdownDelayS) {
+            if (flagIn && *flagIn < ctx.shutdown.minDelayS) {
                 char buf[128];
                 std::snprintf(buf, sizeof(buf),
                               "shutdown: delay must be at least %u seconds (config min_shutdown_delay_s)",
-                              ctx.minShutdownDelayS);
+                              ctx.shutdown.minDelayS);
                 return buf;
             }
 
             // Schedule shutdown.
             uint32_t delaySecs = flagNow ? 0u : *flagIn;
-            uint32_t intervalSecs = flagInterval.value_or(ctx.shutdownWarningIntervalS);
-            ctx.gameLoop->enqueueSimCallback([ctx, delaySecs, intervalSecs, flagReason]() {
-                ctx.broadcaster->initiateShutdown(delaySecs, intervalSecs, flagReason);
+            uint32_t intervalSecs = flagInterval.value_or(ctx.shutdown.warningIntervalS);
+            ctx.sim.gameLoop->enqueueSimCallback([ctx, delaySecs, intervalSecs, flagReason]() {
+                ctx.sim.broadcaster->initiateShutdown(delaySecs, intervalSecs, flagReason);
             });
 
             std::string result;
@@ -797,30 +798,30 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     // pause / resume
     registry.registerCommand("pause", "pause  -- pause the simulation (ticks stop; connections stay active)",
                              [ctx](std::span<std::string_view>) -> std::string {
-                                 if (!ctx.gameLoop)
+                                 if (!ctx.sim.gameLoop)
                                      return "pause: game loop not available";
-                                 ctx.gameLoop->setRate(TimeRate::Paused);
-                                 if (ctx.shell)
-                                     ctx.shell->print("simulation paused");
+                                 ctx.sim.gameLoop->setRate(TimeRate::Paused);
+                                 if (ctx.rcon.shell)
+                                     ctx.rcon.shell->print("simulation paused");
                                  return "simulation paused";
                              });
 
     registry.registerCommand("resume", "resume  -- resume the simulation at normal rate",
                              [ctx](std::span<std::string_view>) -> std::string {
-                                 if (!ctx.gameLoop)
+                                 if (!ctx.sim.gameLoop)
                                      return "resume: game loop not available";
-                                 ctx.gameLoop->setRate(TimeRate::Normal);
-                                 if (ctx.shell)
-                                     ctx.shell->print("simulation resumed");
+                                 ctx.sim.gameLoop->setRate(TimeRate::Normal);
+                                 if (ctx.rcon.shell)
+                                     ctx.rcon.shell->print("simulation resumed");
                                  return "simulation resumed";
                              });
 
     // quit
     registry.registerCommand("quit", "quit  -- shut down fl-server gracefully",
                              [ctx](std::span<std::string_view>) -> std::string {
-                                 if (!ctx.quitFlag)
+                                 if (!ctx.env.quitFlag)
                                      return "quit: not available";
-                                 *ctx.quitFlag = 1;
+                                 *ctx.env.quitFlag = 1;
                                  return "shutting down...";
                              });
 }

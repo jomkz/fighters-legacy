@@ -22,44 +22,56 @@ class WeatherController;
 class WorldBroadcaster;
 } // namespace fl
 
-// Context injected into server admin commands. All pointers may be nullptr;
+// Context injected into server admin commands, grouped by concern. All pointers may be nullptr;
 // commands check for their required pointers and return an error string if unavailable.
 struct ServerCommandContext {
-    fl::WorldBroadcaster* broadcaster{nullptr};
-    fl::EntityManager* entityManager{nullptr};
-    fl::EntityTypeRegistry* typeRegistry{nullptr};
-    fl::WeatherController* weatherController{nullptr};
-    DiscoveryBeacon* beacon{nullptr}; // for reload_config name update
-    GameLoop* gameLoop{nullptr};      // for enqueueSimCallback
-    ILogger* logger{nullptr};         // for reload_config parse logging
-    std::string* configPath{nullptr}; // path to server.toml, for reload_config
-    std::chrono::steady_clock::time_point startTime{};
-    volatile sig_atomic_t* quitFlag{nullptr}; // quit command sets this to 1
+    // Live simulation objects. Mutations run on the sim thread via sim.gameLoop->enqueueSimCallback.
+    struct SimRefs {
+        fl::WorldBroadcaster* broadcaster{nullptr};
+        fl::EntityManager* entityManager{nullptr};
+        fl::EntityTypeRegistry* typeRegistry{nullptr};
+        fl::WeatherController* weatherController{nullptr};
+        GameLoop* gameLoop{nullptr}; // for enqueueSimCallback
+    } sim;
 
-    // Shutdown command configuration (from ServerConfig [shutdown] section).
-    uint32_t shutdownWarningIntervalS{300}; // default 5 min between countdown notices
-    uint32_t minShutdownDelayS{0};          // 0 = no minimum enforced
-    bool shutdownRequireConfirm{true};      // require --force flag to schedule/trigger shutdown
+    // Process/runtime environment.
+    struct ServerEnv {
+        ILogger* logger{nullptr};         // for reload_config parse logging
+        std::string* configPath{nullptr}; // path to server.toml, for reload_config
+        std::chrono::steady_clock::time_point startTime{};
+        volatile sig_atomic_t* quitFlag{nullptr}; // quit command sets this to 1
+        DiscoveryBeacon* beacon{nullptr};         // for reload_config name update
+    } env;
 
-    // Ban/allowlist file persistence. Null = no file configured.
-    std::string* banlistPath{nullptr};
-    std::string* allowlistPath{nullptr};
-    // Callbacks into main.cpp file I/O; called from sim thread (via enqueueSimCallback).
-    std::function<void(const std::unordered_set<std::string>&)> saveBanlist;
-    // Callbacks called on the main thread to load IP list files.
-    std::function<std::unordered_set<std::string>()> loadBanlist;
-    std::function<std::unordered_set<std::string>()> loadAllowlist;
+    // Shutdown command policy (from ServerConfig [shutdown] section).
+    struct ShutdownPolicy {
+        uint32_t warningIntervalS{300}; // default 5 min between countdown notices
+        uint32_t minDelayS{0};          // 0 = no minimum enforced
+        bool requireConfirm{true};      // require --force flag to schedule/trigger shutdown
+    } shutdown;
 
-    // Clears the RCON auth lockout for an IP; null when RCON is not configured.
-    // Returns true if a lockout was active. Called from sim thread via enqueueSimCallback.
-    std::function<bool(const std::string&)> clearRconLockout;
+    // Ban/allowlist file persistence. Null paths = no file configured.
+    struct BanPersistence {
+        std::string* banlistPath{nullptr};
+        std::string* allowlistPath{nullptr};
+        // saveBanlist is called from the sim thread (via enqueueSimCallback);
+        // loadBanlist/loadAllowlist are called on the main thread.
+        std::function<void(const std::unordered_set<std::string>&)> saveBanlist;
+        std::function<std::unordered_set<std::string>()> loadBanlist;
+        std::function<std::unordered_set<std::string>()> loadAllowlist;
+    } bans;
 
-    // Returns RCON channel auth lockout state; null when RCON is not configured.
-    std::function<fl::AuthLockoutSummary()> getRconAuthSummary;
-
-    // Optional output shell; sim-callback confirmations are also routed here
-    // for future RCON drain (see issue #304). nullptr = disabled.
-    CommandShell* shell{nullptr};
+    // RCON channel hooks. All null when RCON is not configured.
+    struct RconHooks {
+        // Clears the RCON auth lockout for an IP (true if a lockout was active);
+        // called from the sim thread via enqueueSimCallback.
+        std::function<bool(const std::string&)> clearRconLockout;
+        // Returns RCON channel auth lockout state.
+        std::function<fl::AuthLockoutSummary()> getRconAuthSummary;
+        // Optional output shell; sim-callback confirmations are also routed here for
+        // RCON drain (issue #304). nullptr = disabled.
+        CommandShell* shell{nullptr};
+    } rcon;
 };
 
 // Register all fl-server admin commands into registry using the given context.

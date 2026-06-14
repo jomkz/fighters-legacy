@@ -336,9 +336,17 @@ int main(int argc, char** argv) {
     wparams.timeScaleRatio = static_cast<float>(cfg.timeScale);
     fl::WeatherController weatherController(wparams);
     fl::WorldBroadcaster broadcaster(entityManager, entityRegistry, *net, *log, &weatherController);
-    broadcaster.setRateLimitParams(cfg.connectRateLimitCount, cfg.connectRateLimitWindowS, cfg.packetFloodMultiplier);
-    broadcaster.setMaxConnectionsPerIp(cfg.maxConnectionsPerIp);
-    broadcaster.setAdminAuthParams(cfg.adminAuthMaxFailures, cfg.adminAuthLockoutSeconds);
+    fl::WorldBroadcasterConfig wbConfig;
+    wbConfig.connectRateLimit = cfg.connectRateLimitCount;
+    wbConfig.connectRateWindowS = cfg.connectRateLimitWindowS;
+    wbConfig.floodMultiplier = cfg.packetFloodMultiplier;
+    wbConfig.maxConnectionsPerIp = cfg.maxConnectionsPerIp;
+    wbConfig.adminAuthMaxFailures = cfg.adminAuthMaxFailures;
+    wbConfig.adminAuthLockoutSeconds = cfg.adminAuthLockoutSeconds;
+    wbConfig.motd = cfg.motd;
+    wbConfig.motdDisplaySeconds = cfg.motdDisplayS;
+    wbConfig.operatorPassword = cfg.operatorPassword;
+    broadcaster.applyConfig(wbConfig);
     // Seed the ground floor from the already-primed TerrainStreamer at the spawn origin.
     // Used by FlightIntegrator::step as the physics floor and by onConnect for peer spawn
     // altitude (peers spawn at groundElevation + 500 m AGL). Updated each frame below.
@@ -369,40 +377,39 @@ int main(int argc, char** argv) {
 
     GameLoop gameLoop(broadcaster, *log);
     ServerCommandContext adminCtx;
-    adminCtx.broadcaster = &broadcaster;
-    adminCtx.entityManager = &entityManager;
-    adminCtx.typeRegistry = &entityRegistry;
-    adminCtx.weatherController = &weatherController;
-    adminCtx.beacon = beacon.get();
-    adminCtx.gameLoop = &gameLoop;
-    adminCtx.logger = log;
-    adminCtx.configPath = &configPath;
-    adminCtx.quitFlag = &g_quit;
-    adminCtx.banlistPath = cfg.banlistPath.empty() ? nullptr : &cfg.banlistPath;
-    adminCtx.allowlistPath = cfg.allowlistPath.empty() ? nullptr : &cfg.allowlistPath;
-    adminCtx.saveBanlist = [&](const std::unordered_set<std::string>& b) { saveIpListFile(cfg.banlistPath, b, log); };
-    adminCtx.loadBanlist = [&]() { return loadIpListFile(cfg.banlistPath, log); };
-    adminCtx.loadAllowlist = [&]() { return loadIpListFile(cfg.allowlistPath, log); };
-    adminCtx.shutdownWarningIntervalS = static_cast<uint32_t>(cfg.shutdownWarningIntervalS);
-    adminCtx.minShutdownDelayS = static_cast<uint32_t>(cfg.minShutdownDelayS);
-    adminCtx.shutdownRequireConfirm = cfg.shutdownRequireConfirm;
-    adminCtx.shell = &adminShell;
-    adminCtx.clearRconLockout = [&rconServer](const std::string& ip) -> bool {
+    adminCtx.sim.broadcaster = &broadcaster;
+    adminCtx.sim.entityManager = &entityManager;
+    adminCtx.sim.typeRegistry = &entityRegistry;
+    adminCtx.sim.weatherController = &weatherController;
+    adminCtx.env.beacon = beacon.get();
+    adminCtx.sim.gameLoop = &gameLoop;
+    adminCtx.env.logger = log;
+    adminCtx.env.configPath = &configPath;
+    adminCtx.env.quitFlag = &g_quit;
+    adminCtx.bans.banlistPath = cfg.banlistPath.empty() ? nullptr : &cfg.banlistPath;
+    adminCtx.bans.allowlistPath = cfg.allowlistPath.empty() ? nullptr : &cfg.allowlistPath;
+    adminCtx.bans.saveBanlist = [&](const std::unordered_set<std::string>& b) {
+        saveIpListFile(cfg.banlistPath, b, log);
+    };
+    adminCtx.bans.loadBanlist = [&]() { return loadIpListFile(cfg.banlistPath, log); };
+    adminCtx.bans.loadAllowlist = [&]() { return loadIpListFile(cfg.allowlistPath, log); };
+    adminCtx.shutdown.warningIntervalS = static_cast<uint32_t>(cfg.shutdownWarningIntervalS);
+    adminCtx.shutdown.minDelayS = static_cast<uint32_t>(cfg.minShutdownDelayS);
+    adminCtx.shutdown.requireConfirm = cfg.shutdownRequireConfirm;
+    adminCtx.rcon.shell = &adminShell;
+    adminCtx.rcon.clearRconLockout = [&rconServer](const std::string& ip) -> bool {
         return rconServer ? rconServer->clearLockout(ip) : false;
     };
-    adminCtx.getRconAuthSummary = [&rconServer]() -> fl::AuthLockoutSummary {
+    adminCtx.rcon.getRconAuthSummary = [&rconServer]() -> fl::AuthLockoutSummary {
         return rconServer ? rconServer->getRconAuthSummary() : fl::AuthLockoutSummary{};
     };
 
     broadcaster.setShutdownCallback([&]() { g_quit = 1; });
     registerServerCommands(adminRegistry, adminCtx);
 
-    if (!cfg.motd.empty())
-        broadcaster.setMotd(cfg.motd);
-    broadcaster.setMotdDisplaySeconds(cfg.motdDisplayS);
-
+    // MOTD and operator password were applied via applyConfig() above; the admin dispatcher needs
+    // adminRegistry (built just above) so it is wired here.
     if (!cfg.operatorPassword.empty()) {
-        broadcaster.setOperatorPassword(cfg.operatorPassword);
         broadcaster.setAdminDispatch([&adminRegistry](std::string_view cmd) { return adminRegistry.dispatch(cmd); });
         log->log(LogLevel::Info, __FILE__, __LINE__, "network admin commands: enabled");
     } else {
@@ -414,7 +421,7 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
 
-    adminCtx.startTime = std::chrono::steady_clock::now();
+    adminCtx.env.startTime = std::chrono::steady_clock::now();
 
     // ---- Start sim loop ----
     gameLoop.start();

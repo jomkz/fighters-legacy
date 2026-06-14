@@ -162,7 +162,7 @@ TEST_CASE("AdminConsole: reload_config with null configPath returns error", "[ad
 TEST_CASE("AdminConsole: quit sets quitFlag to 1", "[admin_console]") {
     volatile sig_atomic_t flag = 0;
     ServerCommandContext ctx;
-    ctx.quitFlag = &flag;
+    ctx.env.quitFlag = &flag;
     auto reg = makeRegistry(ctx);
     auto out = reg.dispatch("quit");
     CHECK(flag == 1);
@@ -188,7 +188,7 @@ TEST_CASE("AdminConsole: reload_banlist with null banlistPath returns not availa
 TEST_CASE("AdminConsole: reload_banlist with empty banlistPath returns not available", "[admin_console][security]") {
     ServerCommandContext ctx;
     std::string emptyPath;
-    ctx.banlistPath = &emptyPath; // non-null but empty
+    ctx.bans.banlistPath = &emptyPath; // non-null but empty
     auto reg = makeRegistry(ctx);
     std::string out = reg.dispatch("reload_banlist");
     CHECK(out.find("not available") != std::string::npos);
@@ -208,7 +208,7 @@ TEST_CASE("AdminConsole: reload_allowlist with empty allowlistPath returns not a
           "[admin_console][security]") {
     ServerCommandContext ctx;
     std::string emptyPath;
-    ctx.allowlistPath = &emptyPath;
+    ctx.bans.allowlistPath = &emptyPath;
     auto reg = makeRegistry(ctx);
     std::string out = reg.dispatch("reload_allowlist");
     CHECK(out.find("not available") != std::string::npos);
@@ -244,8 +244,8 @@ TEST_CASE("AdminConsole: shutdown --in with null gameLoop returns not available"
     ServerCommandContext ctx;
     // broadcaster non-null but gameLoop == nullptr — use a sentinel address
     static int sentinel;
-    ctx.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
-    ctx.gameLoop = nullptr;
+    ctx.sim.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
+    ctx.sim.gameLoop = nullptr;
     auto reg = makeRegistry(ctx);
     std::string out = reg.dispatch("shutdown --in 30m --force");
     CHECK(out.find("not available") != std::string::npos);
@@ -254,8 +254,8 @@ TEST_CASE("AdminConsole: shutdown --in with null gameLoop returns not available"
 TEST_CASE("AdminConsole: shutdown --in with invalid duration returns error", "[admin_console][shutdown]") {
     ServerCommandContext ctx;
     static int sentinel;
-    ctx.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
-    ctx.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
+    ctx.sim.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
+    ctx.sim.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
     auto reg = makeRegistry(ctx);
     std::string out = reg.dispatch("shutdown --in notaduration --force");
     CHECK(out.find("invalid") != std::string::npos);
@@ -264,9 +264,9 @@ TEST_CASE("AdminConsole: shutdown --in with invalid duration returns error", "[a
 TEST_CASE("AdminConsole: shutdown --in without --force returns confirmation prompt", "[admin_console][shutdown]") {
     ServerCommandContext ctx;
     static int sentinel;
-    ctx.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
-    ctx.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
-    ctx.shutdownRequireConfirm = true;
+    ctx.sim.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
+    ctx.sim.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
+    ctx.shutdown.requireConfirm = true;
     auto reg = makeRegistry(ctx);
     std::string out = reg.dispatch("shutdown --in 30m");
     // Should prompt to re-run with --force, not schedule anything
@@ -276,9 +276,9 @@ TEST_CASE("AdminConsole: shutdown --in without --force returns confirmation prom
 TEST_CASE("AdminConsole: shutdown --now without --force returns confirmation prompt", "[admin_console][shutdown]") {
     ServerCommandContext ctx;
     static int sentinel;
-    ctx.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
-    ctx.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
-    ctx.shutdownRequireConfirm = true;
+    ctx.sim.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
+    ctx.sim.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
+    ctx.shutdown.requireConfirm = true;
     auto reg = makeRegistry(ctx);
     std::string out = reg.dispatch("shutdown --now");
     CHECK(out.find("--force") != std::string::npos);
@@ -299,8 +299,8 @@ TEST_CASE("AdminConsole: shutdown --delay with null broadcaster returns not avai
 TEST_CASE("AdminConsole: shutdown unknown flag returns error", "[admin_console][shutdown]") {
     ServerCommandContext ctx;
     static int sentinel;
-    ctx.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
-    ctx.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
+    ctx.sim.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
+    ctx.sim.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
     auto reg = makeRegistry(ctx);
     std::string out = reg.dispatch("shutdown --bogus");
     CHECK(out.find("unknown flag") != std::string::npos);
@@ -309,8 +309,8 @@ TEST_CASE("AdminConsole: shutdown unknown flag returns error", "[admin_console][
 TEST_CASE("AdminConsole: shutdown --reason without value returns error", "[admin_console][shutdown]") {
     ServerCommandContext ctx;
     static int sentinel;
-    ctx.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
-    ctx.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
+    ctx.sim.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
+    ctx.sim.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
     auto reg = makeRegistry(ctx);
     std::string out = reg.dispatch("shutdown --in 30m --force --reason");
     CHECK(out.find("requires a value") != std::string::npos);
@@ -320,9 +320,9 @@ TEST_CASE("AdminConsole: shutdown --in with multi-word --reason preserves confir
           "[admin_console][shutdown]") {
     ServerCommandContext ctx;
     static int sentinel;
-    ctx.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
-    ctx.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
-    ctx.shutdownRequireConfirm = true;
+    ctx.sim.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
+    ctx.sim.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
+    ctx.shutdown.requireConfirm = true;
     auto reg = makeRegistry(ctx);
     std::string out = reg.dispatch("shutdown --in 30m --reason scheduled maintenance");
     CHECK(out.find("--force") != std::string::npos);
@@ -331,10 +331,10 @@ TEST_CASE("AdminConsole: shutdown --in with multi-word --reason preserves confir
 TEST_CASE("AdminConsole: shutdown --reason stops consuming at next double-dash flag", "[admin_console][shutdown]") {
     ServerCommandContext ctx;
     static int sentinel;
-    ctx.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
-    ctx.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
-    ctx.shutdownRequireConfirm = false;
-    ctx.minShutdownDelayS = 100;
+    ctx.sim.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&sentinel);
+    ctx.sim.gameLoop = reinterpret_cast<GameLoop*>(&sentinel);
+    ctx.shutdown.requireConfirm = false;
+    ctx.shutdown.minDelayS = 100;
     auto reg = makeRegistry(ctx);
     // --reason consumes "maintenance" only (stops at --force); --force bypasses the confirm gate;
     // the 10s delay is below minShutdownDelayS=100 so the min-delay gate fires.
@@ -366,9 +366,9 @@ struct AsyncAckFixture {
     ServerCommandContext ctx;
 
     AsyncAckFixture() {
-        ctx.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&bcast_sentinel);
-        ctx.entityManager = reinterpret_cast<fl::EntityManager*>(&em_sentinel);
-        ctx.gameLoop = &loop;
+        ctx.sim.broadcaster = reinterpret_cast<fl::WorldBroadcaster*>(&bcast_sentinel);
+        ctx.sim.entityManager = reinterpret_cast<fl::EntityManager*>(&em_sentinel);
+        ctx.sim.gameLoop = &loop;
     }
 };
 int AsyncAckFixture::bcast_sentinel = 0;
@@ -417,7 +417,7 @@ TEST_CASE("AdminConsole async ack: admin_unlock IP returns non-empty ack", "[adm
 TEST_CASE("AdminConsole async ack: admin_unlock with clearRconLockout set returns ack with IP",
           "[admin_console][async_ack]") {
     AsyncAckFixture f;
-    f.ctx.clearRconLockout = [](const std::string&) -> bool { return false; };
+    f.ctx.rcon.clearRconLockout = [](const std::string&) -> bool { return false; };
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("admin_unlock 1.2.3.4");
     CHECK_FALSE(out.empty());
@@ -463,7 +463,7 @@ TEST_CASE("AdminConsole async ack: shutdown no-args returns status queued string
 
 TEST_CASE("AdminConsole async ack: shutdown --delay returns extension queued string", "[admin_console][async_ack]") {
     AsyncAckFixture f;
-    f.ctx.shutdownRequireConfirm = false;
+    f.ctx.shutdown.requireConfirm = false;
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("shutdown --delay 5m");
     CHECK(out == "shutdown: extension queued");
@@ -479,7 +479,7 @@ TEST_CASE("AdminConsole shell output: sync ack appears in outputLines", "[admin_
     CommandShell shell(logger, reg);
 
     ServerCommandContext ctx{};
-    ctx.shell = &shell;
+    ctx.rcon.shell = &shell;
     registerServerCommands(reg, ctx);
 
     // status returns a synchronous ack string; verify it also lands in the ring
@@ -501,7 +501,7 @@ TEST_CASE("AdminConsole shell drain: drainSince captures post-dispatch shell out
     CommandShell shell(logger, reg);
 
     ServerCommandContext ctx{};
-    ctx.shell = &shell;
+    ctx.rcon.shell = &shell;
     registerServerCommands(reg, ctx);
 
     // Simulate RCON thread: dispatch then snapshot mark (after dispatch to skip sync writes)
@@ -542,7 +542,7 @@ TEST_CASE("AdminConsole: resume sets GameLoop rate to Normal", "[admin_console][
 
 TEST_CASE("AdminConsole: pause with null gameLoop returns error message", "[admin_console][pause]") {
     ServerCommandContext ctx{};
-    ctx.gameLoop = nullptr;
+    ctx.sim.gameLoop = nullptr;
     auto reg = makeRegistry(ctx);
     std::string out = reg.dispatch("pause");
     CHECK_FALSE(out.empty()); // should return "not available" or similar, not crash
@@ -550,7 +550,7 @@ TEST_CASE("AdminConsole: pause with null gameLoop returns error message", "[admi
 
 TEST_CASE("AdminConsole: resume with null gameLoop returns error message", "[admin_console][pause]") {
     ServerCommandContext ctx{};
-    ctx.gameLoop = nullptr;
+    ctx.sim.gameLoop = nullptr;
     auto reg = makeRegistry(ctx);
     std::string out = reg.dispatch("resume");
     CHECK_FALSE(out.empty());
@@ -591,9 +591,9 @@ struct WbFixture {
     ServerCommandContext ctx;
 
     WbFixture() {
-        ctx.broadcaster = &broadcaster;
-        ctx.entityManager = &em;
-        ctx.gameLoop = &loop;
+        ctx.sim.broadcaster = &broadcaster;
+        ctx.sim.entityManager = &em;
+        ctx.sim.gameLoop = &loop;
     }
 };
 } // namespace
@@ -606,7 +606,7 @@ TEST_CASE("AdminConsole: peers with null broadcaster returns not available", "[a
 
 TEST_CASE("AdminConsole wb: peers with null gameLoop returns not available", "[admin_console][wb]") {
     WbFixture f;
-    f.ctx.gameLoop = nullptr;
+    f.ctx.sim.gameLoop = nullptr;
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("peers");
     CHECK(out.find("not available") != std::string::npos);
@@ -637,7 +637,7 @@ TEST_CASE("AdminConsole wb: peers with one connected peer returns 1 peer(s) conn
 
 TEST_CASE("AdminConsole wb: status with null entityManager returns not available", "[admin_console][wb]") {
     WbFixture f;
-    f.ctx.entityManager = nullptr; // broadcaster is real; entityManager is null
+    f.ctx.sim.entityManager = nullptr; // broadcaster is real; entityManager is null
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("status");
     CHECK(out.find("not available") != std::string::npos);
@@ -701,7 +701,7 @@ TEST_CASE("AdminConsole wb: status and admin_auth_status reflect active lockout"
     NullLogger2 shellLog;
     CommandRegistry shellReg;
     CommandShell shell(shellLog, shellReg);
-    f.ctx.shell = &shell;
+    f.ctx.rcon.shell = &shell;
     auto reg = makeRegistry(f.ctx);
 
     std::string statusOut = reg.dispatch("status");
@@ -736,7 +736,7 @@ TEST_CASE("AdminConsole wb: admin_auth_status shows pending failure line", "[adm
     NullLogger2 shellLog;
     CommandRegistry shellReg;
     CommandShell shell(shellLog, shellReg);
-    f.ctx.shell = &shell;
+    f.ctx.rcon.shell = &shell;
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("admin_auth_status");
     // per-IP detail goes to shell output; dispatch returns the summary ack
@@ -750,11 +750,11 @@ TEST_CASE("AdminConsole wb: admin_auth_status shows pending failure line", "[adm
 }
 
 TEST_CASE("AdminConsole wb: admin_auth_status no RCON callback shows only admin section", "[admin_console][wb]") {
-    WbFixture f; // ctx.getRconAuthSummary is null by default
+    WbFixture f; // ctx.rcon.getRconAuthSummary is null by default
     NullLogger2 shellLog;
     CommandRegistry shellReg;
     CommandShell shell(shellLog, shellReg);
-    f.ctx.shell = &shell;
+    f.ctx.rcon.shell = &shell;
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("admin_auth_status");
     CHECK(out == "0 lockout(s) active");
@@ -768,11 +768,11 @@ TEST_CASE("AdminConsole wb: admin_auth_status no RCON callback shows only admin 
 TEST_CASE("AdminConsole wb: admin_auth_status with RCON callback shows both sections when zero entries",
           "[admin_console][wb]") {
     WbFixture f;
-    f.ctx.getRconAuthSummary = []() { return fl::AuthLockoutSummary{}; };
+    f.ctx.rcon.getRconAuthSummary = []() { return fl::AuthLockoutSummary{}; };
     NullLogger2 shellLog;
     CommandRegistry shellReg;
     CommandShell shell(shellLog, shellReg);
-    f.ctx.shell = &shell;
+    f.ctx.rcon.shell = &shell;
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("admin_auth_status");
     CHECK(out == "admin: 0 lockout(s) | rcon: 0 lockout(s)");
@@ -789,11 +789,11 @@ TEST_CASE("AdminConsole wb: admin_auth_status with RCON callback shows locked-ou
     rconS.activeCount = 1;
     rconS.threshold = 5;
     rconS.entries.push_back({"5.6.7.8", true, 0, 120LL});
-    f.ctx.getRconAuthSummary = [rconS]() { return rconS; };
+    f.ctx.rcon.getRconAuthSummary = [rconS]() { return rconS; };
     NullLogger2 shellLog;
     CommandRegistry shellReg;
     CommandShell shell(shellLog, shellReg);
-    f.ctx.shell = &shell;
+    f.ctx.rcon.shell = &shell;
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("admin_auth_status");
     CHECK(out == "admin: 0 lockout(s) | rcon: 1 lockout(s)");
@@ -810,11 +810,11 @@ TEST_CASE("AdminConsole wb: admin_auth_status with RCON callback shows pending R
     rconS.activeCount = 0;
     rconS.threshold = 5;
     rconS.entries.push_back({"9.10.11.12", false, 3, 0LL});
-    f.ctx.getRconAuthSummary = [rconS]() { return rconS; };
+    f.ctx.rcon.getRconAuthSummary = [rconS]() { return rconS; };
     NullLogger2 shellLog;
     CommandRegistry shellReg;
     CommandShell shell(shellLog, shellReg);
-    f.ctx.shell = &shell;
+    f.ctx.rcon.shell = &shell;
     auto reg = makeRegistry(f.ctx);
     std::string out = reg.dispatch("admin_auth_status");
     CHECK(out == "admin: 0 lockout(s) | rcon: 0 lockout(s)");
