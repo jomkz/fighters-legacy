@@ -2020,10 +2020,11 @@ static std::vector<uint8_t> makeAdminCmd(const char* token, const char* command)
 // ---------------------------------------------------------------------------
 
 static std::string parseMotdText(const std::vector<uint8_t>& pkt) {
-    if (pkt.size() < 4 || pkt[0] != static_cast<uint8_t>(fl::MsgId::Motd))
+    if (pkt.size() < sizeof(fl::MsgMotdHeader) + 1u || pkt[0] != static_cast<uint8_t>(fl::MsgId::Motd))
         return {};
-    // exclude msgId (0), displaySeconds (1-2), and trailing NUL (last byte)
-    return std::string(reinterpret_cast<const char*>(pkt.data() + 3), pkt.size() - 4);
+    // exclude the 4-byte MsgMotdHeader and the trailing NUL.
+    return std::string(reinterpret_cast<const char*>(pkt.data() + sizeof(fl::MsgMotdHeader)),
+                       pkt.size() - sizeof(fl::MsgMotdHeader) - 1u);
 }
 
 TEST_CASE("WorldBroadcaster: no MOTD sent by default", "[world_broadcaster][motd]") {
@@ -2074,8 +2075,8 @@ TEST_CASE("WorldBroadcaster: oversized MOTD capped at kMaxMotdBytes", "[world_br
     broadcaster.onConnect(0u);
 
     REQUIRE(net.sends.size() == 3u);
-    // 1 (msgId) + 2 (displaySeconds) + kMaxMotdBytes (text) + 1 (NUL) = kMaxMotdBytes + 4
-    CHECK(net.sends[2].size() == fl::kMaxMotdBytes + 4u);
+    // sizeof(MsgMotdHeader) (4) + kMaxMotdBytes (text) + 1 (NUL)
+    CHECK(net.sends[2].size() == sizeof(fl::MsgMotdHeader) + fl::kMaxMotdBytes + 1u);
     CHECK(net.sends[2].back() == 0u); // NUL terminator
 }
 
@@ -2110,9 +2111,9 @@ TEST_CASE("WorldBroadcaster: MOTD displaySeconds is 0 by default", "[world_broad
     broadcaster.onConnect(0u);
 
     REQUIRE(net.sends.size() == 3u);
-    REQUIRE(net.sends[2].size() >= 3u);
+    REQUIRE(net.sends[2].size() >= sizeof(fl::MsgMotdHeader));
     uint16_t secs = 0;
-    std::memcpy(&secs, net.sends[2].data() + 1, sizeof(secs));
+    std::memcpy(&secs, net.sends[2].data() + offsetof(fl::MsgMotdHeader, displaySeconds), sizeof(secs));
     CHECK(secs == 0u);
 }
 
@@ -2130,9 +2131,9 @@ TEST_CASE("WorldBroadcaster: MOTD packet displaySeconds matches setMotdDisplaySe
     broadcaster.onConnect(0u);
 
     REQUIRE(net.sends.size() == 3u);
-    REQUIRE(net.sends[2].size() >= 3u);
+    REQUIRE(net.sends[2].size() >= sizeof(fl::MsgMotdHeader));
     uint16_t secs = 0;
-    std::memcpy(&secs, net.sends[2].data() + 1, sizeof(secs));
+    std::memcpy(&secs, net.sends[2].data() + offsetof(fl::MsgMotdHeader, displaySeconds), sizeof(secs));
     CHECK(secs == 45u);
 }
 

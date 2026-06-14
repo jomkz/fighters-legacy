@@ -11,6 +11,7 @@
 #include "console/GameConsole.h"
 #include "entity/EntityTypeRegistry.h"
 #include "net/GameProtocol.h"
+#include "net/WireCodec.h"
 #include "render/SimRenderBridge.h"
 
 #include "mock_network.h"
@@ -32,12 +33,12 @@ struct MockLogger : ILogger {
 // Records disconnect()/disconnectPeer() so the version-mismatch and refusal paths are assertable.
 using MockNetwork = TrackingNetwork;
 
-// Build a raw MsgMotd packet: msgId byte + displaySeconds (LE) + text + NUL terminator.
+// Build a raw MsgMotd packet: MsgMotdHeader + text + NUL terminator.
 static std::vector<uint8_t> makeMotdPacket(std::string_view text, uint16_t displaySeconds = 0) {
+    fl::MsgMotdHeader hdr{};
+    hdr.displaySeconds = displaySeconds;
     std::vector<uint8_t> pkt;
-    pkt.push_back(static_cast<uint8_t>(fl::MsgId::Motd));
-    pkt.push_back(static_cast<uint8_t>(displaySeconds & 0xFFu));
-    pkt.push_back(static_cast<uint8_t>(displaySeconds >> 8u));
+    fl::appendMsg(pkt, hdr);
     pkt.insert(pkt.end(), text.begin(), text.end());
     pkt.push_back(0u);
     return pkt;
