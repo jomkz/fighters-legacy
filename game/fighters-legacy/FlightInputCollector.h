@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "IClock.h"
 #include "net/GameProtocol.h"
 
 #include <chrono>
 #include <cstdint>
-#include <functional>
 #include <optional>
 
 class CameraInput;
@@ -38,11 +38,11 @@ class FlightInputCollector {
         return m_weaponFired;
     }
 
-    void setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn);
+    void setClock(const fl::IClock& clock);
 
   private:
     uint32_t m_inputSeq{0};
-    std::function<std::chrono::steady_clock::time_point()> m_clock{std::chrono::steady_clock::now};
+    const fl::IClock* m_clock{&fl::SystemClock::instance()};
     std::chrono::steady_clock::time_point m_lastInputTime{};
     bool m_weaponFired{false};
 };

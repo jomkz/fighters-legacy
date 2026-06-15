@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "IClock.h"
 #include "RconServer.h"
 #include "console/CommandRegistry.h"
 #include "console/CommandShell.h"
@@ -164,8 +165,6 @@ TEST_CASE("splitResponse returns one empty string for empty body", "[rcon][split
 // fl::AuthTracker — per-IP failed-auth counter and lockout
 // ---------------------------------------------------------------------------
 
-using SteadyTp = std::chrono::steady_clock::time_point;
-
 TEST_CASE("AuthTracker: counter increments, no lockout before threshold", "[rcon][auth_tracker]") {
     fl::AuthTracker tracker(5, 60);
     for (int i = 0; i < 4; ++i) {
@@ -184,12 +183,12 @@ TEST_CASE("AuthTracker: lockout triggered on Nth failure", "[rcon][auth_tracker]
 
 TEST_CASE("AuthTracker: isLockedOut false after expiry (clock override)", "[rcon][auth_tracker]") {
     fl::AuthTracker tracker(5, 60);
-    SteadyTp now{};
-    tracker.setClockOverride([&now] { return now; });
+    fl::ManualClock now;
+    tracker.setClock(now);
     for (int i = 0; i < 5; ++i)
         tracker.recordFailure("1.2.3.4");
     CHECK(tracker.isLockedOut("1.2.3.4"));
-    now += std::chrono::seconds(61);
+    now.advance(std::chrono::seconds(61));
     CHECK_FALSE(tracker.isLockedOut("1.2.3.4"));
 }
 
@@ -216,11 +215,11 @@ TEST_CASE("AuthTracker: recordSuccess does not clear an active lockout", "[rcon]
 
 TEST_CASE("AuthTracker: after lockout expiry failure counter restarts from zero", "[rcon][auth_tracker]") {
     fl::AuthTracker tracker(5, 60);
-    SteadyTp now{};
-    tracker.setClockOverride([&now] { return now; });
+    fl::ManualClock now;
+    tracker.setClock(now);
     for (int i = 0; i < 5; ++i)
         tracker.recordFailure("1.2.3.4");
-    now += std::chrono::seconds(61);
+    now.advance(std::chrono::seconds(61));
     CHECK_FALSE(tracker.isLockedOut("1.2.3.4")); // expired
     // Fresh counter: 4 failures stay below threshold
     for (int i = 0; i < 4; ++i)
@@ -252,11 +251,11 @@ TEST_CASE("AuthTracker: failure counter persists across reconnects", "[rcon][aut
 
 TEST_CASE("AuthTracker: pruneExpired removes expired entry", "[rcon][auth_tracker]") {
     fl::AuthTracker tracker(5, 60);
-    SteadyTp now{};
-    tracker.setClockOverride([&now] { return now; });
+    fl::ManualClock now;
+    tracker.setClock(now);
     for (int i = 0; i < 5; ++i)
         tracker.recordFailure("1.2.3.4");
-    now += std::chrono::seconds(61);
+    now.advance(std::chrono::seconds(61));
     tracker.pruneExpired();
     CHECK_FALSE(tracker.isLockedOut("1.2.3.4"));
 }
@@ -333,19 +332,19 @@ TEST_CASE("AuthTracker: lockedOutCount returns 0 initially", "[rcon][auth_tracke
 
 TEST_CASE("AuthTracker: lockedOutCount reflects lockout and 0 after expiry", "[rcon][auth_tracker]") {
     fl::AuthTracker tracker(2, 60);
-    SteadyTp now{};
-    tracker.setClockOverride([&] { return now; });
+    fl::ManualClock now;
+    tracker.setClock(now);
     tracker.recordFailure("1.2.3.4");
     tracker.recordFailure("1.2.3.4");
     CHECK(tracker.lockedOutCount() == 1);
-    now += std::chrono::seconds(61);
+    now.advance(std::chrono::seconds(61));
     CHECK(tracker.lockedOutCount() == 0);
 }
 
 TEST_CASE("AuthTracker: failureSummary shows locked-out entry", "[rcon][auth_tracker]") {
     fl::AuthTracker tracker(2, 300);
-    SteadyTp now{};
-    tracker.setClockOverride([&] { return now; });
+    fl::ManualClock now;
+    tracker.setClock(now);
     tracker.recordFailure("1.2.3.4");
     tracker.recordFailure("1.2.3.4");
     auto entries = tracker.failureSummary();
@@ -370,11 +369,11 @@ TEST_CASE("AuthTracker: failureSummary shows pending failure entry", "[rcon][aut
 
 TEST_CASE("AuthTracker: failureSummary excludes expired lockouts", "[rcon][auth_tracker]") {
     fl::AuthTracker tracker(2, 60);
-    SteadyTp now{};
-    tracker.setClockOverride([&] { return now; });
+    fl::ManualClock now;
+    tracker.setClock(now);
     tracker.recordFailure("1.2.3.4");
     tracker.recordFailure("1.2.3.4");
-    now += std::chrono::seconds(61);
+    now.advance(std::chrono::seconds(61));
     auto entries = tracker.failureSummary();
     CHECK(entries.empty());
 }
@@ -386,8 +385,8 @@ TEST_CASE("AuthTracker: maxFailures returns configured threshold", "[rcon][auth_
 
 TEST_CASE("AuthTracker: failureSummary returns both locked and pending IPs", "[rcon][auth_tracker]") {
     fl::AuthTracker tracker(2, 300);
-    SteadyTp now{};
-    tracker.setClockOverride([&] { return now; });
+    fl::ManualClock now;
+    tracker.setClock(now);
     // Lock out first IP
     tracker.recordFailure("1.1.1.1");
     tracker.recordFailure("1.1.1.1");

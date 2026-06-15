@@ -350,14 +350,14 @@ void ENetNetwork::setPreHandshakeRateLimit(int maxAttempts, int windowMs) {
     m_preHandshakeWindowMs = windowMs;
 }
 
-void ENetNetwork::setPreHandshakeClockOverride(std::function<std::chrono::steady_clock::time_point()> fn) {
-    m_preHandshakeNow = std::move(fn);
+void ENetNetwork::setPreHandshakeClock(const fl::IClock& clock) {
+    m_preHandshakeClock = &clock;
 }
 
 bool ENetNetwork::checkPreHandshakeConnect(const char* ip) noexcept {
     if (m_preHandshakeRateLimit == 0)
         return true;
-    auto now = m_preHandshakeNow();
+    auto now = m_preHandshakeClock->now();
     auto windowStart = now - std::chrono::milliseconds(m_preHandshakeWindowMs);
     PreHandshakeRecord& rec = m_preHandshakeRecords[ip];
     while (!rec.timestamps.empty() && rec.timestamps.front() < windowStart)

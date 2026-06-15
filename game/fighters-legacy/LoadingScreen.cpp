@@ -8,13 +8,23 @@
 
 LoadingScreen::LoadingScreen(std::atomic<bool>& serverReady, std::function<bool()> isConnected,
                              std::function<void()> onServerReady, bool isSinglePlayer,
-                             std::function<const char*()> getStartFailMsg,
-                             std::function<const char*()> getConnectFailMsg)
+                             std::atomic<SessionFailure>* sessionFailure)
     : m_serverReady(serverReady), m_isConnected(std::move(isConnected)), m_onServerReady(std::move(onServerReady)),
-      m_getStartFailMsg(std::move(getStartFailMsg)), m_getConnectFailMsg(std::move(getConnectFailMsg)),
-      m_isSinglePlayer(isSinglePlayer) {
+      m_sessionFailure(sessionFailure), m_isSinglePlayer(isSinglePlayer) {
     addLine("Loading...");
     addLine(m_isSinglePlayer ? "Starting local server..." : "Connecting to remote server...");
+}
+
+bool LoadingScreen::checkSessionFailure() {
+    if (!m_sessionFailure)
+        return false;
+    SessionFailure f = m_sessionFailure->load(std::memory_order_acquire);
+    if (f == SessionFailure::None)
+        return false;
+    addLine(sessionFailureMessage(f));
+    m_failedAt = m_clock->now();
+    m_phase = Phase::Failed;
+    return true;
 }
 
 void LoadingScreen::reset() {
@@ -29,8 +39,8 @@ void LoadingScreen::reset() {
     addLine(m_isSinglePlayer ? "Starting local server..." : "Connecting to remote server...");
 }
 
-void LoadingScreen::setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn) {
-    m_now = std::move(fn);
+void LoadingScreen::setClock(const fl::IClock& clock) {
+    m_clock = &clock;
 }
 
 void LoadingScreen::addLine(const char* text) {
@@ -43,7 +53,8 @@ Screen LoadingScreen::update(IInput& /*input*/, IWindow& /*window*/) {
     case Phase::StartingServer: {
         using namespace std::chrono;
         if (m_startDeadline == steady_clock::time_point{})
-            m_startDeadline = m_now() + duration_cast<steady_clock::duration>(duration<float>(kStartTimeoutSeconds));
+            m_startDeadline =
+                m_clock->now() + duration_cast<steady_clock::duration>(duration<float>(kStartTimeoutSeconds));
 
         if (m_serverReady.load(std::memory_order_relaxed)) {
             if (!m_onServerReadyCalled) {
@@ -51,23 +62,17 @@ Screen LoadingScreen::update(IInput& /*input*/, IWindow& /*window*/) {
                 m_onServerReady();
                 addLine("Connecting...");
                 m_connectDeadline =
-                    m_now() + duration_cast<steady_clock::duration>(duration<float>(kConnectTimeoutSeconds));
+                    m_clock->now() + duration_cast<steady_clock::duration>(duration<float>(kConnectTimeoutSeconds));
             }
             m_phase = Phase::Connecting;
         } else {
             // Check for an immediate failure signal from the server thread.
-            if (m_getStartFailMsg) {
-                if (const char* msg = m_getStartFailMsg()) {
-                    addLine(msg);
-                    m_failedAt = m_now();
-                    m_phase = Phase::Failed;
-                    break;
-                }
-            }
+            if (checkSessionFailure())
+                break;
             // Fallback: generic message if start() never returned (hung process).
-            if (m_now() > m_startDeadline) {
-                addLine("Local server failed to start.");
-                m_failedAt = m_now();
+            if (m_clock->now() > m_startDeadline) {
+                addLine(sessionFailureMessage(SessionFailure::ServerStartHang));
+                m_failedAt = m_clock->now();
                 m_phase = Phase::Failed;
             }
         }
@@ -75,20 +80,14 @@ Screen LoadingScreen::update(IInput& /*input*/, IWindow& /*window*/) {
     }
 
     case Phase::Connecting:
-        if (m_getConnectFailMsg) {
-            if (const char* msg = m_getConnectFailMsg()) {
-                addLine(msg);
-                m_failedAt = m_now();
-                m_phase = Phase::Failed;
-                break;
-            }
-        }
+        if (checkSessionFailure())
+            break;
         if (m_isConnected()) {
             addLine("Ready.");
             m_phase = Phase::Ready;
-        } else if (m_now() > m_connectDeadline && m_connectDeadline != std::chrono::steady_clock::time_point{}) {
-            addLine("Connection timed out.");
-            m_failedAt = m_now();
+        } else if (m_clock->now() > m_connectDeadline && m_connectDeadline != std::chrono::steady_clock::time_point{}) {
+            addLine(sessionFailureMessage(SessionFailure::ConnectTimeout));
+            m_failedAt = m_clock->now();
             m_phase = Phase::Failed;
         }
         break;
@@ -98,7 +97,7 @@ Screen LoadingScreen::update(IInput& /*input*/, IWindow& /*window*/) {
 
     case Phase::Failed: {
         using namespace std::chrono;
-        auto elapsed = duration_cast<duration<float>>(m_now() - m_failedAt).count();
+        auto elapsed = duration_cast<duration<float>>(m_clock->now() - m_failedAt).count();
         if (elapsed >= kFailDisplaySeconds)
             return Screen::MainMenu;
         break;

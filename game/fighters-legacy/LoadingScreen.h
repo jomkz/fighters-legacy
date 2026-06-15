@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "IClock.h"
 #include "IScreen.h"
 #include "RenderTypes.h"
+#include "SessionStatus.h"
 
 #include <array>
 #include <atomic>
@@ -18,20 +20,14 @@
 //                    calls clientNet->connect()
 //   isSinglePlayer — controls initial status text and whether the StartingServer
 //                    phase is shown; pass false for remote-connect sessions
-//   getStartFailMsg  — returns a static failure string as soon as the server thread
-//                      signals failure (SpawnFailed/BindFailed/Timeout), or nullptr
-//                      while still starting; pass nullptr (default) for multiplayer
-//   getConnectFailMsg — returns a static failure string (e.g. "Server version mismatch."
-//                       or "Connection refused by server.") when the client detects a
-//                       connection-level failure; polled every tick in Phase::Connecting
-//                       before the timeout fires; pass nullptr (default) for single-player
-//                       (failure is shown via getStartFailMsg) or when not needed
+//   sessionFailure — optional atomic written (first-writer-wins) by the server thread and the ENet
+//                    client handler; polled every tick in StartingServer/Connecting and surfaced via
+//                    sessionFailureMessage(). nullptr = no external failure signalling
 class LoadingScreen : public IScreen {
   public:
     LoadingScreen(std::atomic<bool>& serverReady, std::function<bool()> isConnected,
                   std::function<void()> onServerReady, bool isSinglePlayer = true,
-                  std::function<const char*()> getStartFailMsg = nullptr,
-                  std::function<const char*()> getConnectFailMsg = nullptr);
+                  std::atomic<SessionFailure>* sessionFailure = nullptr);
 
     Screen update(IInput& input, IWindow& window) override;
     std::span<const HudElement> buildElements() override;
@@ -39,7 +35,7 @@ class LoadingScreen : public IScreen {
     // Reset to initial state for a new session.
     void reset();
 
-    void setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn);
+    void setClock(const fl::IClock& clock);
 
   private:
     enum class Phase { StartingServer, Connecting, Ready, Failed };
@@ -47,8 +43,7 @@ class LoadingScreen : public IScreen {
     std::atomic<bool>& m_serverReady;
     std::function<bool()> m_isConnected;
     std::function<void()> m_onServerReady;
-    std::function<const char*()> m_getStartFailMsg;
-    std::function<const char*()> m_getConnectFailMsg;
+    std::atomic<SessionFailure>* m_sessionFailure;
     bool m_isSinglePlayer;
 
     Phase m_phase{Phase::StartingServer};
@@ -59,7 +54,7 @@ class LoadingScreen : public IScreen {
     static constexpr float kFailDisplaySeconds = 3.f;
     static constexpr float kConnectTimeoutSeconds = 10.f;
     static constexpr float kStartTimeoutSeconds = 10.f;
-    std::function<std::chrono::steady_clock::time_point()> m_now{std::chrono::steady_clock::now};
+    const fl::IClock* m_clock{&fl::SystemClock::instance()};
 
     static constexpr int kMaxLines = 6;
     static constexpr int kMaxElements = kMaxLines + 1; // + background rect
@@ -70,4 +65,6 @@ class LoadingScreen : public IScreen {
 
     void addLine(const char* text);
     void buildHudElements();
+    // If *m_sessionFailure is set, append its message, enter Phase::Failed, return true.
+    bool checkSessionFailure();
 };

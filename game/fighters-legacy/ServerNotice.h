@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "IClock.h"
 #include "RenderTypes.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <functional>
 #include <span>
 #include <string_view>
 
@@ -21,7 +21,7 @@ class ServerNotice {
         std::snprintf(m_buf, sizeof(m_buf), "%.*s", static_cast<int>(text.size()), text.data());
         m_active = true;
         if (visibleSeconds > 0) {
-            m_expiry = m_now() + std::chrono::seconds(visibleSeconds);
+            m_expiry = m_clock->now() + std::chrono::seconds(visibleSeconds);
             m_fadeStart = m_expiry - std::chrono::seconds(static_cast<long long>(kFadeSecs));
             m_hasExpiry = true;
         } else {
@@ -29,8 +29,8 @@ class ServerNotice {
         }
     }
 
-    void setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn) {
-        m_now = std::move(fn);
+    void setClock(const fl::IClock& clock) {
+        m_clock = &clock;
     }
 
     [[nodiscard]] std::span<const HudElement> buildElements() {
@@ -38,7 +38,7 @@ class ServerNotice {
             return {};
         float alpha = 1.f;
         if (m_hasExpiry) {
-            const auto now = m_now();
+            const auto now = m_clock->now();
             if (now >= m_expiry) {
                 m_active = false;
                 return {};
@@ -64,7 +64,7 @@ class ServerNotice {
   private:
     static constexpr float kFadeSecs = 2.f;
 
-    std::function<std::chrono::steady_clock::time_point()> m_now{std::chrono::steady_clock::now};
+    const fl::IClock* m_clock{&fl::SystemClock::instance()};
     std::chrono::steady_clock::time_point m_expiry{};
     std::chrono::steady_clock::time_point m_fadeStart{};
     bool m_hasExpiry{false};

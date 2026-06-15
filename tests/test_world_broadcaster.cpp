@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "IClock.h"
 #include "ILogger.h"
 #include "INetwork.h"
 #include "entity/DamageDef.h"
 #include "entity/EntityDef.h"
 #include "entity/EntityManager.h"
 #include "entity/EntityTypeRegistry.h"
+#include "entity/IEntityController.h"
 #include "net/GameProtocol.h"
 #include "net/WorldBroadcaster.h"
 #include "render/RenderSnapshot.h"
@@ -110,6 +112,108 @@ TEST_CASE("WorldBroadcaster: onTick broadcasts WorldSnapshot for N entities", "[
     fl::MsgEntityEntry e0;
     std::memcpy(&e0, pkt.data() + sizeof(hdr), sizeof(e0));
     CHECK(e0.pos[1] == 500.0);
+}
+
+// Stub controller: drives the entity at a fixed throttle with no peer connection. Records how many
+// times it is sampled so the test can confirm onTick steps non-peer entities.
+struct ConstantController : fl::IEntityController {
+    float throttle{1.0f};
+    int sampleCount{0};
+    fl::ControlInput sample(const fl::EntityState&, uint64_t, double) override {
+        ++sampleCount;
+        fl::ControlInput ctrl{};
+        ctrl.throttle = throttle;
+        return ctrl;
+    }
+};
+
+TEST_CASE("WorldBroadcaster: registerController steps a non-peer entity and serializes it", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::EntityTransform t{};
+    t.pos[1] = 1000.0;
+    fl::EntityId id = em.spawn("builtin:debug-entity", t);
+    REQUIRE(id.valid());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    // No peer ever connects — register an AI/scripted controller directly.
+    auto controller = std::make_unique<ConstantController>();
+    ConstantController* ctrlPtr = controller.get();
+    broadcaster.registerController(id, std::move(controller));
+
+    for (uint64_t tick = 1; tick <= 120; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    // The controller was sampled once per tick — proof the non-peer entity is stepped.
+    CHECK(ctrlPtr->sampleCount == 120);
+
+    // The entity moved under its own controller (full-throttle builtin model accelerates forward).
+    const fl::EntityState* st = em.get(id);
+    REQUIRE(st != nullptr);
+    const bool moved = st->transform.pos[0] != 0.0 || st->transform.pos[2] != 0.0 || st->transform.pos[1] != 1000.0;
+    CHECK(moved);
+
+    // It serializes into the snapshot with live throttle telemetry, no peer required.
+    const auto& pkt = net.broadcasts.back();
+    fl::MsgWorldSnapshotHeader hdr;
+    std::memcpy(&hdr, pkt.data(), sizeof(hdr));
+    REQUIRE(hdr.entityCount == 1u);
+    fl::MsgEntityEntry e0;
+    std::memcpy(&e0, pkt.data() + sizeof(hdr), sizeof(e0));
+    CHECK(e0.throttle > 0u); // throttle spooled up toward the commanded 100%
+}
+
+TEST_CASE("WorldBroadcaster: flight model resolver is consulted for a flightModelId, falls back on miss",
+          "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+
+    fl::EntityDef def = makeDebugDef();
+    def.flightModelId = "models/x";
+    registry.registerType(def);
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    std::string requestedId;
+    broadcaster.setFlightModelResolver([&](const std::string& id) -> std::shared_ptr<const fl::FlightModelData> {
+        requestedId = id;
+        return nullptr; // unknown id -> WorldBroadcaster falls back to the builtin model
+    });
+
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    CHECK(requestedId == "models/x"); // resolver consulted with the entity's flightModelId
+    CHECK(em.liveCount() == 1u);      // spawn still succeeded via the builtin fallback
+}
+
+TEST_CASE("WorldBroadcaster: flight model resolver is skipped when flightModelId is empty", "[world_broadcaster]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef()); // empty flightModelId
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    bool called = false;
+    broadcaster.setFlightModelResolver([&](const std::string&) -> std::shared_ptr<const fl::FlightModelData> {
+        called = true;
+        return nullptr;
+    });
+
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    CHECK_FALSE(called); // empty id -> resolver never invoked
+    CHECK(em.liveCount() == 1u);
 }
 
 TEST_CASE("WorldBroadcaster: onTick with zero entities broadcasts empty header", "[world_broadcaster]") {
@@ -1001,8 +1105,8 @@ TEST_CASE("WorldBroadcaster: IP under rate limit is not disconnected", "[world_b
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.setRateLimitParams(5, 10, 3);
 
     net.peerAddresses[0] = "1.2.3.4:1000";
@@ -1025,8 +1129,8 @@ TEST_CASE("WorldBroadcaster: IP exceeding rate limit is disconnected", "[world_b
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.setRateLimitParams(3, 10, 3);
 
     net.peerAddresses[0] = "1.2.3.4:1000";
@@ -1054,8 +1158,8 @@ TEST_CASE("WorldBroadcaster: rate limit resets after window expires", "[world_br
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.setRateLimitParams(2, 5, 3);
 
     net.peerAddresses[0] = "1.2.3.4:1000";
@@ -1070,7 +1174,7 @@ TEST_CASE("WorldBroadcaster: rate limit resets after window expires", "[world_br
     net.sends.clear();
 
     // Advance clock past the window
-    t += std::chrono::seconds(6);
+    t.advance(std::chrono::seconds(6));
 
     // Should be allowed again
     broadcaster.onConnect(0u);
@@ -1085,8 +1189,8 @@ TEST_CASE("WorldBroadcaster: rate limit tracks different IPs independently", "[w
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.setRateLimitParams(2, 10, 3);
 
     // IP-A fills limit
@@ -1357,8 +1461,8 @@ TEST_CASE("WorldBroadcaster: peer within flood limit is not disconnected", "[wor
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setRateLimitParams(100, 10, 2); // threshold = 120 packets/s
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
 
     net.peerAddresses[0] = "1.2.3.4:1000";
     broadcaster.onConnect(0u);
@@ -1379,8 +1483,8 @@ TEST_CASE("WorldBroadcaster: peer exceeding flood limit is disconnected", "[worl
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setRateLimitParams(100, 10, 2); // threshold = 120 packets/s
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
 
     net.peerAddresses[0] = "1.2.3.4:1000";
     broadcaster.onConnect(0u);
@@ -1402,8 +1506,8 @@ TEST_CASE("WorldBroadcaster: flood counter resets after 1s window", "[world_broa
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setRateLimitParams(100, 10, 2); // threshold = 120
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
 
     net.peerAddresses[0] = "1.2.3.4:1000";
     broadcaster.onConnect(0u);
@@ -1415,7 +1519,7 @@ TEST_CASE("WorldBroadcaster: flood counter resets after 1s window", "[world_broa
     CHECK(net.disconnectedPeers.empty());
 
     // Advance past the 1s window, counter resets
-    t += std::chrono::seconds(2);
+    t.advance(std::chrono::seconds(2));
     // Send 120 more — still at limit in the new window
     for (int i = 0; i < 120; ++i)
         broadcaster.onReceive(0u, pkt.data(), pkt.size());
@@ -1431,8 +1535,8 @@ TEST_CASE("WorldBroadcaster: non-ClientInput packets do not count toward flood",
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setRateLimitParams(100, 10, 2); // threshold = 120
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
 
     net.peerAddresses[0] = "1.2.3.4:1000";
     broadcaster.onConnect(0u);
@@ -1454,8 +1558,8 @@ TEST_CASE("WorldBroadcaster: onDisconnect clears flood state", "[world_broadcast
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setRateLimitParams(100, 10, 1); // threshold = 60
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
 
     net.peerAddresses[0] = "1.2.3.4:1000";
     broadcaster.onConnect(0u);
@@ -1550,8 +1654,8 @@ TEST_CASE("WorldBroadcaster: rate limit prune preserves entries with unexpired t
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setRateLimitParams(10, 5, 3);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
 
     net.peerAddresses[0] = "1.2.3.4:1000";
     // One recent connect
@@ -1578,8 +1682,8 @@ TEST_CASE("WorldBroadcaster: rate limit prune removes fully expired entries", "[
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
     broadcaster.setRateLimitParams(1, 5, 3);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
 
     net.peerAddresses[0] = "1.2.3.4:1000";
     // One connect fills limit (limit=1)
@@ -1589,7 +1693,7 @@ TEST_CASE("WorldBroadcaster: rate limit prune removes fully expired entries", "[
     net.sends.clear();
 
     // Advance clock past window
-    t += std::chrono::seconds(6);
+    t.advance(std::chrono::seconds(6));
 
     // Run 600 ticks to trigger prune (timestamps now all expired)
     for (int i = 0; i < 600; ++i)
@@ -1624,8 +1728,8 @@ TEST_CASE("WorldBroadcaster: initiateShutdown broadcasts first notice on next ti
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.initiateShutdown(30, 5);
 
     CHECK(broadcaster.isShuttingDown());
@@ -1647,8 +1751,8 @@ TEST_CASE("WorldBroadcaster: no notice broadcast when interval not reached", "[w
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.initiateShutdown(60, 30); // 30s interval
 
     // First tick fires first notice.
@@ -1660,7 +1764,7 @@ TEST_CASE("WorldBroadcaster: no notice broadcast when interval not reached", "[w
     REQUIRE(noticesAfterFirst == 1u);
 
     // Advance only 10s (halfway through 30s interval) — no new notice expected.
-    t += std::chrono::seconds(10);
+    t.advance(std::chrono::seconds(10));
     net.broadcasts.clear();
     broadcaster.onTick(1.0 / 60.0, 1u);
 
@@ -1678,15 +1782,15 @@ TEST_CASE("WorldBroadcaster: cancelShutdown stops countdown", "[world_broadcaste
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.initiateShutdown(60, 30);
     broadcaster.onTick(1.0 / 60.0, 0u);
     broadcaster.cancelShutdown();
     CHECK(!broadcaster.isShuttingDown());
 
     net.broadcasts.clear();
-    t += std::chrono::seconds(70); // past original shutdown time
+    t.advance(std::chrono::seconds(70)); // past original shutdown time
     broadcaster.onTick(1.0 / 60.0, 1u);
 
     fl::MsgServerNotice notice{};
@@ -1700,12 +1804,12 @@ TEST_CASE("WorldBroadcaster: extendShutdown pushes back and fires immediate noti
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.initiateShutdown(30, 5);
     broadcaster.onTick(1.0 / 60.0, 0u);
 
-    t += std::chrono::seconds(20);
+    t.advance(std::chrono::seconds(20));
     net.broadcasts.clear();
 
     REQUIRE(broadcaster.extendShutdown(60u));
@@ -1735,11 +1839,11 @@ TEST_CASE("WorldBroadcaster: shutdown callback fires at T=0", "[world_broadcaste
     bool called = false;
     broadcaster.setShutdownCallback([&called]() { called = true; });
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.initiateShutdown(10, 5);
 
-    t += std::chrono::seconds(11);
+    t.advance(std::chrono::seconds(11));
     broadcaster.onTick(1.0 / 60.0, 0u);
 
     CHECK(called);
@@ -1754,8 +1858,8 @@ TEST_CASE("WorldBroadcaster: T=0 fires without crash when no callback set", "[wo
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.initiateShutdown(0, 0);
 
     broadcaster.onTick(1.0 / 60.0, 0u);
@@ -1776,8 +1880,8 @@ TEST_CASE("WorldBroadcaster: initiateShutdown delay=0 fires on very next tick", 
     bool called = false;
     broadcaster.setShutdownCallback([&called]() { called = true; });
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.initiateShutdown(0, 0);
 
     broadcaster.onTick(1.0 / 60.0, 0u);
@@ -1795,14 +1899,14 @@ TEST_CASE("WorldBroadcaster: T-60 notice always fires with 5-min interval", "[wo
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.initiateShutdown(600, 300); // 10 min, 5-min interval
 
     broadcaster.onTick(1.0 / 60.0, 0u); // first notice at T-600s
 
     // Advance to T-61s (would skip T-60s without the clamp logic).
-    t += std::chrono::seconds(539);
+    t.advance(std::chrono::seconds(539));
     net.broadcasts.clear();
     broadcaster.onTick(1.0 / 60.0, 1u);
 
@@ -1819,8 +1923,8 @@ TEST_CASE("WorldBroadcaster: notice text contains hours for delays >= 3600s", "[
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.initiateShutdown(7200, 3600);
 
     broadcaster.onTick(1.0 / 60.0, 0u);
@@ -1837,8 +1941,8 @@ TEST_CASE("WorldBroadcaster: notice text contains minutes for delays 61-3599s", 
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.initiateShutdown(300, 60);
 
     broadcaster.onTick(1.0 / 60.0, 0u);
@@ -1855,11 +1959,11 @@ TEST_CASE("WorldBroadcaster: notice text uses final-minute wording at T-60s", "[
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.initiateShutdown(300, 60);
 
-    t += std::chrono::seconds(245); // T-55s remaining
+    t.advance(std::chrono::seconds(245)); // T-55s remaining
     broadcaster.onTick(1.0 / 60.0, 0u);
 
     fl::MsgServerNotice notice{};
@@ -1875,8 +1979,8 @@ TEST_CASE("WorldBroadcaster: initiateShutdown with reason includes reason in cou
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.initiateShutdown(300, 5, "Server restarting");
 
     broadcaster.onTick(1.0 / 60.0, 0u);
@@ -1896,8 +2000,8 @@ TEST_CASE("WorldBroadcaster: initiateShutdown with reason uses short format for 
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.initiateShutdown(30, 5, "Server restarting");
 
     broadcaster.onTick(1.0 / 60.0, 0u);
@@ -1918,8 +2022,8 @@ TEST_CASE("WorldBroadcaster: initiateShutdown with reason includes reason in T=0
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.initiateShutdown(0, 5, "Server restarting");
 
     broadcaster.onTick(1.0 / 60.0, 0u);
@@ -1938,8 +2042,8 @@ TEST_CASE("WorldBroadcaster: long reason is safely truncated to fit MsgServerNot
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     std::string longReason(60, 'X');
     broadcaster.initiateShutdown(300, 5, longReason);
 
@@ -1958,8 +2062,8 @@ TEST_CASE("WorldBroadcaster: cancelShutdown clears reason so subsequent shutdown
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.initiateShutdown(30, 5, "reason text");
     broadcaster.cancelShutdown();
     broadcaster.initiateShutdown(30, 5);
@@ -1980,8 +2084,8 @@ TEST_CASE("WorldBroadcaster: extendShutdown preserves reason in subsequent notic
     fl::EntityManager em(logger, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
-    auto t = std::chrono::steady_clock::now();
-    broadcaster.setClockOverride([&t]() { return t; });
+    fl::ManualClock t;
+    broadcaster.setClock(t);
     broadcaster.initiateShutdown(120, 60, "Server restarting");
 
     // First tick fires first notice.
@@ -1989,7 +2093,7 @@ TEST_CASE("WorldBroadcaster: extendShutdown preserves reason in subsequent notic
     std::size_t firstNoticeIdx = net.broadcasts.size() - 1;
 
     // Advance 60s to reach next notice interval then extend.
-    t += std::chrono::seconds(60);
+    t.advance(std::chrono::seconds(60));
     broadcaster.extendShutdown(60);
     net.broadcasts.clear();
     broadcaster.onTick(1.0 / 60.0, 1u);
@@ -2398,12 +2502,11 @@ TEST_CASE("WorldBroadcaster: MsgAdminCommand long result truncated to 125 chars"
 
 // Shared setup helper: broadcaster with password "pw", dispatch noop, 3-failure
 // threshold, 60 s lockout, injectable clock, and peer 0 connected from 1.2.3.4.
-static void setupAuthFixture(fl::WorldBroadcaster& broadcaster, MockNetwork& net,
-                             std::chrono::steady_clock::time_point& now) {
+static void setupAuthFixture(fl::WorldBroadcaster& broadcaster, MockNetwork& net, fl::ManualClock& now) {
     broadcaster.setOperatorPassword("pw");
     broadcaster.setAdminDispatch([](std::string_view) -> std::string { return "ok"; });
     broadcaster.setAdminAuthParams(3, 60);
-    broadcaster.setClockOverride([&now] { return now; });
+    broadcaster.setClock(now);
     broadcaster.onConnect(0u);
     net.sends.clear();
     net.disconnectedPeers.clear();
@@ -2417,7 +2520,7 @@ TEST_CASE("WorldBroadcaster: admin auth no lockout before threshold", "[world_br
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    auto now = std::chrono::steady_clock::now();
+    fl::ManualClock now;
     setupAuthFixture(broadcaster, net, now);
 
     // N-1 = 2 failures; peer must remain connected after each
@@ -2437,7 +2540,7 @@ TEST_CASE("WorldBroadcaster: admin auth lockout triggered on Nth failure -- peer
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    auto now = std::chrono::steady_clock::now();
+    fl::ManualClock now;
     setupAuthFixture(broadcaster, net, now);
 
     // 2 failures — no kick
@@ -2463,7 +2566,7 @@ TEST_CASE("WorldBroadcaster: admin auth onConnect refused while locked", "[world
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    auto now = std::chrono::steady_clock::now();
+    fl::ManualClock now;
     setupAuthFixture(broadcaster, net, now);
 
     // Trigger lockout on peer 0
@@ -2492,7 +2595,7 @@ TEST_CASE("WorldBroadcaster: admin auth lockout expires after TTL", "[world_broa
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    auto now = std::chrono::steady_clock::now();
+    fl::ManualClock now;
     setupAuthFixture(broadcaster, net, now);
 
     // Trigger lockout
@@ -2504,7 +2607,7 @@ TEST_CASE("WorldBroadcaster: admin auth lockout expires after TTL", "[world_broa
     net.sends.clear();
 
     // Advance clock past 60 s TTL
-    now += std::chrono::seconds(61);
+    now.advance(std::chrono::seconds(61));
 
     // Reconnect — should succeed (MsgHello sent, not in disconnectedPeers)
     broadcaster.onConnect(1u);
@@ -2524,7 +2627,7 @@ TEST_CASE("WorldBroadcaster: admin auth per-IP isolation", "[world_broadcaster][
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    auto now = std::chrono::steady_clock::now();
+    fl::ManualClock now;
     setupAuthFixture(broadcaster, net, now);
 
     // Connect peer 1 from IP B
@@ -2560,7 +2663,7 @@ TEST_CASE("WorldBroadcaster: admin auth failure counter persists across disconne
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    auto now = std::chrono::steady_clock::now();
+    fl::ManualClock now;
     setupAuthFixture(broadcaster, net, now);
 
     // 2 failures on peer 0 — below threshold
@@ -2594,7 +2697,7 @@ TEST_CASE("WorldBroadcaster: admin auth correct token resets failure counter", "
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    auto now = std::chrono::steady_clock::now();
+    fl::ManualClock now;
     setupAuthFixture(broadcaster, net, now);
 
     // N-1 = 2 failures
@@ -2627,9 +2730,9 @@ TEST_CASE("WorldBroadcaster: admin auth wrong tokens when operator_password unse
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    auto now = std::chrono::steady_clock::now();
+    fl::ManualClock now;
     broadcaster.setAdminAuthParams(3, 60);
-    broadcaster.setClockOverride([&now] { return now; });
+    broadcaster.setClock(now);
     // Note: operator_password intentionally NOT set — admin channel disabled
     broadcaster.onConnect(0u);
     net.sends.clear();
@@ -2657,7 +2760,7 @@ TEST_CASE("WorldBroadcaster: admin auth pruneExpired fires after 600 onTick call
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    auto now = std::chrono::steady_clock::now();
+    fl::ManualClock now;
     setupAuthFixture(broadcaster, net, now);
 
     // Trigger lockout
@@ -2669,7 +2772,7 @@ TEST_CASE("WorldBroadcaster: admin auth pruneExpired fires after 600 onTick call
     net.sends.clear();
 
     // Advance past TTL — lockout entry is now expired but not yet pruned
-    now += std::chrono::seconds(61);
+    now.advance(std::chrono::seconds(61));
 
     // Drive 600 onTick calls to trigger the prune cycle
     for (int i = 0; i < 600; ++i)
@@ -2693,7 +2796,7 @@ TEST_CASE("WorldBroadcaster: admin_unlock clears lockout -- onConnect succeeds",
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    auto now = std::chrono::steady_clock::now();
+    fl::ManualClock now;
     setupAuthFixture(broadcaster, net, now);
 
     // Trigger lockout on peer 0
@@ -2725,7 +2828,7 @@ TEST_CASE("WorldBroadcaster: admin_unlock is a no-op when IP is not locked", "[w
     registry.registerType(makeDebugDef());
     fl::EntityManager em(log, registry);
     fl::WorldBroadcaster broadcaster(em, registry, net, log);
-    auto now = std::chrono::steady_clock::now();
+    fl::ManualClock now;
     setupAuthFixture(broadcaster, net, now);
 
     // No failures — unlockAdminAuth must report IP was not locked

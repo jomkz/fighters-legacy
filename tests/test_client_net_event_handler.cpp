@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "IClock.h"
 #include <catch2/catch_test_macros.hpp>
 
 #include "ClientNetEventHandler.h"
@@ -12,6 +13,8 @@
 #include "entity/EntityTypeRegistry.h"
 #include "net/GameProtocol.h"
 #include "net/WireCodec.h"
+
+#include "SessionStatus.h"
 #include "render/SimRenderBridge.h"
 
 #include "mock_network.h"
@@ -153,9 +156,9 @@ TEST_CASE("ClientNetEventHandler: MsgMotd notice auto-dismisses after 15 seconds
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    auto fakeTime = std::chrono::steady_clock::now();
+    fl::ManualClock fakeTime;
     ServerNotice notice;
-    notice.setClockOverride([&fakeTime]() { return fakeTime; });
+    notice.setClock(fakeTime);
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
     handler.notice = &notice;
@@ -165,7 +168,7 @@ TEST_CASE("ClientNetEventHandler: MsgMotd notice auto-dismisses after 15 seconds
 
     REQUIRE(!notice.buildElements().empty());
 
-    fakeTime += std::chrono::seconds(16);
+    fakeTime.advance(std::chrono::seconds(16));
     CHECK(notice.buildElements().empty());
 }
 
@@ -253,9 +256,9 @@ TEST_CASE("ClientNetEventHandler: MsgMotd honours custom motdDisplaySeconds", "[
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    auto fakeTime = std::chrono::steady_clock::now();
+    fl::ManualClock fakeTime;
     ServerNotice notice;
-    notice.setClockOverride([&fakeTime]() { return fakeTime; });
+    notice.setClock(fakeTime);
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
     handler.notice = &notice;
@@ -266,10 +269,10 @@ TEST_CASE("ClientNetEventHandler: MsgMotd honours custom motdDisplaySeconds", "[
 
     REQUIRE(!notice.buildElements().empty());
 
-    fakeTime += std::chrono::seconds(4);
+    fakeTime.advance(std::chrono::seconds(4));
     CHECK(!notice.buildElements().empty()); // still within window
 
-    fakeTime += std::chrono::seconds(2);
+    fakeTime.advance(std::chrono::seconds(2));
     CHECK(notice.buildElements().empty()); // expired at 6 s
 }
 
@@ -279,9 +282,9 @@ TEST_CASE("ClientNetEventHandler: MsgMotd motdDisplaySeconds 0 is persistent", "
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    auto fakeTime = std::chrono::steady_clock::now();
+    fl::ManualClock fakeTime;
     ServerNotice notice;
-    notice.setClockOverride([&fakeTime]() { return fakeTime; });
+    notice.setClock(fakeTime);
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
     handler.notice = &notice;
@@ -292,7 +295,7 @@ TEST_CASE("ClientNetEventHandler: MsgMotd motdDisplaySeconds 0 is persistent", "
 
     REQUIRE(!notice.buildElements().empty());
 
-    fakeTime += std::chrono::seconds(3600);
+    fakeTime.advance(std::chrono::seconds(3600));
     CHECK(!notice.buildElements().empty()); // still shown — no expiry set
 }
 
@@ -303,9 +306,9 @@ TEST_CASE("ClientNetEventHandler: MsgMotd server displaySeconds overrides client
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    auto fakeTime = std::chrono::steady_clock::now();
+    fl::ManualClock fakeTime;
     ServerNotice notice;
-    notice.setClockOverride([&fakeTime]() { return fakeTime; });
+    notice.setClock(fakeTime);
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
     handler.notice = &notice;
@@ -316,10 +319,10 @@ TEST_CASE("ClientNetEventHandler: MsgMotd server displaySeconds overrides client
 
     REQUIRE(!notice.buildElements().empty());
 
-    fakeTime += std::chrono::seconds(29);
+    fakeTime.advance(std::chrono::seconds(29));
     CHECK(!notice.buildElements().empty()); // still within server window
 
-    fakeTime += std::chrono::seconds(2);
+    fakeTime.advance(std::chrono::seconds(2));
     CHECK(notice.buildElements().empty()); // expired at 31 s (past 30 s server window)
 }
 
@@ -338,9 +341,9 @@ static std::vector<uint8_t> makeMsgHello(uint8_t protocolVersion) {
     return pkt;
 }
 
-static std::vector<uint8_t> makeRefusalPacket(const char* reason) {
+static std::vector<uint8_t> makeRefusalPacket(fl::ConnectRefusalCode code) {
     fl::MsgConnectRefusal msg{};
-    std::snprintf(msg.reason, sizeof(msg.reason), "%s", reason);
+    msg.code = static_cast<uint8_t>(code);
     std::vector<uint8_t> pkt(sizeof(msg));
     std::memcpy(pkt.data(), &msg, sizeof(msg));
     return pkt;
@@ -355,17 +358,17 @@ TEST_CASE("ClientNetEventHandler: MsgHello version mismatch sets atomic and disc
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    std::atomic<const char*> failMsg{nullptr};
+    std::atomic<SessionFailure> failMsg{SessionFailure::None};
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
-    handler.connectFailMsg = &failMsg;
+    handler.sessionFailure = &failMsg;
 
     handler.onConnect(0u);
     auto pkt = makeMsgHello(static_cast<uint8_t>(fl::kProtocolVersion) ^ 0xFF);
     handler.onReceive(0u, pkt.data(), pkt.size());
 
     CHECK(net.disconnectCount == 1);
-    CHECK(std::string(failMsg.load()) == "Server version mismatch.");
+    CHECK(failMsg.load() == SessionFailure::VersionMismatch);
 }
 
 TEST_CASE("ClientNetEventHandler: ENet rejection sets connection refused via onDisconnect",
@@ -375,15 +378,15 @@ TEST_CASE("ClientNetEventHandler: ENet rejection sets connection refused via onD
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    std::atomic<const char*> failMsg{nullptr};
+    std::atomic<SessionFailure> failMsg{SessionFailure::None};
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
-    handler.connectFailMsg = &failMsg;
+    handler.sessionFailure = &failMsg;
 
     handler.onConnect(0u); // m_connected = true, assignedEntityIdx still 0
     handler.onDisconnect(0u);
 
-    CHECK(std::string(failMsg.load()) == "Connection refused by server.");
+    CHECK(failMsg.load() == SessionFailure::ConnectionRefused);
 }
 
 TEST_CASE("ClientNetEventHandler: version mismatch message not overwritten by onDisconnect CAS",
@@ -393,17 +396,17 @@ TEST_CASE("ClientNetEventHandler: version mismatch message not overwritten by on
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    std::atomic<const char*> failMsg{nullptr};
+    std::atomic<SessionFailure> failMsg{SessionFailure::None};
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
-    handler.connectFailMsg = &failMsg;
+    handler.sessionFailure = &failMsg;
 
     handler.onConnect(0u);
     auto pkt = makeMsgHello(static_cast<uint8_t>(fl::kProtocolVersion) ^ 0xFF);
     handler.onReceive(0u, pkt.data(), pkt.size()); // sets "Server version mismatch."
     handler.onDisconnect(0u);                      // CAS should fail — already set
 
-    CHECK(std::string(failMsg.load()) == "Server version mismatch.");
+    CHECK(failMsg.load() == SessionFailure::VersionMismatch);
 }
 
 TEST_CASE("ClientNetEventHandler: onDisconnect does not signal when assignedEntityIdx is nonzero",
@@ -413,16 +416,16 @@ TEST_CASE("ClientNetEventHandler: onDisconnect does not signal when assignedEnti
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    std::atomic<const char*> failMsg{nullptr};
+    std::atomic<SessionFailure> failMsg{SessionFailure::None};
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
-    handler.connectFailMsg = &failMsg;
+    handler.sessionFailure = &failMsg;
     handler.assignedEntityIdx = 1u; // simulates mid-flight disconnect
 
     handler.onConnect(0u);
     handler.onDisconnect(0u);
 
-    CHECK(failMsg.load() == nullptr);
+    CHECK(failMsg.load() == SessionFailure::None);
 }
 
 TEST_CASE("ClientNetEventHandler: null connectFailMsg does not crash on rejection", "[client_net_event_handler]") {
@@ -446,15 +449,15 @@ TEST_CASE("ClientNetEventHandler: ENet timeout path does not signal when onConne
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    std::atomic<const char*> failMsg{nullptr};
+    std::atomic<SessionFailure> failMsg{SessionFailure::None};
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
-    handler.connectFailMsg = &failMsg;
+    handler.sessionFailure = &failMsg;
 
     // No onConnect() call — simulates ENet timeout (server unreachable)
     handler.onDisconnect(0u);
 
-    CHECK(failMsg.load() == nullptr);
+    CHECK(failMsg.load() == SessionFailure::None);
 }
 
 TEST_CASE("ClientNetEventHandler: correct protocolVersion does not disconnect or signal failure",
@@ -464,17 +467,17 @@ TEST_CASE("ClientNetEventHandler: correct protocolVersion does not disconnect or
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    std::atomic<const char*> failMsg{nullptr};
+    std::atomic<SessionFailure> failMsg{SessionFailure::None};
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
-    handler.connectFailMsg = &failMsg;
+    handler.sessionFailure = &failMsg;
 
     handler.onConnect(0u);
     auto pkt = makeMsgHello(static_cast<uint8_t>(fl::kProtocolVersion));
     handler.onReceive(0u, pkt.data(), pkt.size());
 
     CHECK(net.disconnectCount == 0);
-    CHECK(failMsg.load() == nullptr);
+    CHECK(failMsg.load() == SessionFailure::None);
 }
 
 // ---------------------------------------------------------------------------
@@ -488,16 +491,16 @@ TEST_CASE("ClientNetEventHandler: MsgConnectRefusal sets connectFailMsg with rea
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    std::atomic<const char*> failMsg{nullptr};
+    std::atomic<SessionFailure> failMsg{SessionFailure::None};
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
-    handler.connectFailMsg = &failMsg;
+    handler.sessionFailure = &failMsg;
 
-    auto pkt = makeRefusalPacket("You are banned from this server.");
+    auto pkt = makeRefusalPacket(fl::ConnectRefusalCode::Banned);
     handler.onReceive(0u, pkt.data(), pkt.size());
 
-    REQUIRE(failMsg.load() != nullptr);
-    CHECK(std::string(failMsg.load()) == "You are banned from this server.");
+    REQUIRE(failMsg.load() != SessionFailure::None);
+    CHECK(failMsg.load() == SessionFailure::Banned);
 }
 
 TEST_CASE("ClientNetEventHandler: MsgConnectRefusal reason not overwritten by onDisconnect CAS",
@@ -507,17 +510,17 @@ TEST_CASE("ClientNetEventHandler: MsgConnectRefusal reason not overwritten by on
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    std::atomic<const char*> failMsg{nullptr};
+    std::atomic<SessionFailure> failMsg{SessionFailure::None};
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
-    handler.connectFailMsg = &failMsg;
+    handler.sessionFailure = &failMsg;
 
     handler.onConnect(0u);
-    auto pkt = makeRefusalPacket("Access denied.");
+    auto pkt = makeRefusalPacket(fl::ConnectRefusalCode::AccessDenied);
     handler.onReceive(0u, pkt.data(), pkt.size()); // sets specific reason
     handler.onDisconnect(0u);                      // CAS should fail — already set
 
-    CHECK(std::string(failMsg.load()) == "Access denied.");
+    CHECK(failMsg.load() == SessionFailure::AccessDenied);
 }
 
 TEST_CASE("ClientNetEventHandler: MsgConnectRefusal packet too small does not set connectFailMsg",
@@ -527,16 +530,16 @@ TEST_CASE("ClientNetEventHandler: MsgConnectRefusal packet too small does not se
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    std::atomic<const char*> failMsg{nullptr};
+    std::atomic<SessionFailure> failMsg{SessionFailure::None};
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
-    handler.connectFailMsg = &failMsg;
+    handler.sessionFailure = &failMsg;
 
     // 3 bytes is far smaller than sizeof(MsgConnectRefusal) = 64
     const uint8_t pkt[] = {static_cast<uint8_t>(fl::MsgId::ConnectRefusal), 0x00, 0x00};
     handler.onReceive(0u, pkt, sizeof(pkt));
 
-    CHECK(failMsg.load() == nullptr);
+    CHECK(failMsg.load() == SessionFailure::None);
 }
 
 TEST_CASE("ClientNetEventHandler: MsgConnectRefusal with null connectFailMsg does not crash",
@@ -550,7 +553,7 @@ TEST_CASE("ClientNetEventHandler: MsgConnectRefusal with null connectFailMsg doe
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
     // connectFailMsg deliberately not set (default nullptr)
 
-    auto pkt = makeRefusalPacket("Too many connections from your address.");
+    auto pkt = makeRefusalPacket(fl::ConnectRefusalCode::TooManyConnections);
     handler.onReceive(0u, pkt.data(), pkt.size()); // must not crash
 }
 
@@ -561,9 +564,9 @@ TEST_CASE("ClientNetEventHandler: MsgMotd server displaySeconds 0 falls back to 
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    auto fakeTime = std::chrono::steady_clock::now();
+    fl::ManualClock fakeTime;
     ServerNotice notice;
-    notice.setClockOverride([&fakeTime]() { return fakeTime; });
+    notice.setClock(fakeTime);
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
     handler.notice = &notice;
@@ -574,9 +577,9 @@ TEST_CASE("ClientNetEventHandler: MsgMotd server displaySeconds 0 falls back to 
 
     REQUIRE(!notice.buildElements().empty());
 
-    fakeTime += std::chrono::seconds(4);
+    fakeTime.advance(std::chrono::seconds(4));
     CHECK(!notice.buildElements().empty()); // within client window
 
-    fakeTime += std::chrono::seconds(2);
+    fakeTime.advance(std::chrono::seconds(2));
     CHECK(notice.buildElements().empty()); // expired at 6 s (past 5 s client window)
 }

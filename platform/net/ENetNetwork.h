@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "IClock.h"
 #include "INetwork.h"
 #include <chrono>
 #include <deque>
@@ -44,7 +45,7 @@ class ENetNetwork : public INetwork {
     // maxAttempts within windowMs milliseconds before ENet peer state is allocated.
     // maxAttempts = 0 disables the filter. Not part of INetwork — server-only.
     void setPreHandshakeRateLimit(int maxAttempts, int windowMs);
-    void setPreHandshakeClockOverride(std::function<std::chrono::steady_clock::time_point()> fn);
+    void setPreHandshakeClock(const fl::IClock& clock);
 
     // Called from the ENet intercept callback (ENetNetwork.cpp anonymous namespace).
     // Returns true = allow, false = drop.
@@ -70,5 +71,5 @@ class ENetNetwork : public INetwork {
     std::unordered_map<std::string, PreHandshakeRecord> m_preHandshakeRecords;
     int m_preHandshakeRateLimit{20}; // 0 = disabled
     int m_preHandshakeWindowMs{1000};
-    std::function<std::chrono::steady_clock::time_point()> m_preHandshakeNow{std::chrono::steady_clock::now};
+    const fl::IClock* m_preHandshakeClock{&fl::SystemClock::instance()};
 };

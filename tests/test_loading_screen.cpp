@@ -1,13 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "IClock.h"
 #include <catch2/catch_test_macros.hpp>
 
 #include "LoadingScreen.h"
+#include "SessionStatus.h"
 #include "mock_hal.h"
 
 #include <atomic>
 
 static MockInput g_inp;
 static MockWindow g_win;
+
+TEST_CASE("SessionFailure: None maps to empty, every failure to a non-empty message") {
+    CHECK(std::string(sessionFailureMessage(SessionFailure::None)).empty());
+    const SessionFailure all[] = {
+        SessionFailure::ServerSpawnFailed, SessionFailure::ServerBindFailed, SessionFailure::ServerStartTimeout,
+        SessionFailure::ServerStartHang,   SessionFailure::VersionMismatch,  SessionFailure::Banned,
+        SessionFailure::AccessDenied,      SessionFailure::RateLimited,      SessionFailure::TooManyConnections,
+        SessionFailure::ConnectionRefused, SessionFailure::ConnectTimeout};
+    for (SessionFailure f : all)
+        CHECK(std::string(sessionFailureMessage(f)).length() > 0);
+}
 
 TEST_CASE("LoadingScreen: stays on Loading while server not ready") {
     std::atomic<bool> ready{false};
@@ -100,18 +113,17 @@ TEST_CASE("LoadingScreen: multiplayer mode shows remote connect message") {
 }
 
 TEST_CASE("LoadingScreen: connect timeout trips Failed phase then returns MainMenu") {
-    using clk = std::chrono::steady_clock;
-    clk::time_point fakeNow = clk::now();
+    fl::ManualClock fakeNow;
 
     std::atomic<bool> ready{true};
     LoadingScreen s(ready, [] { return false; }, [] {});
-    s.setClockOverride([&] { return fakeNow; });
+    s.setClock(fakeNow);
 
     s.update(g_inp, g_win); // StartingServer → Connecting; deadline = fakeNow + 10s
 
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // within timeout
 
-    fakeNow += std::chrono::seconds(11);              // past connect deadline
+    fakeNow.advance(std::chrono::seconds(11));        // past connect deadline
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // → Failed; within kFailDisplaySeconds
 
     bool foundMsg = false;
@@ -120,25 +132,24 @@ TEST_CASE("LoadingScreen: connect timeout trips Failed phase then returns MainMe
             foundMsg = true;
     CHECK(foundMsg);
 
-    fakeNow += std::chrono::seconds(4); // past kFailDisplaySeconds (3s)
+    fakeNow.advance(std::chrono::seconds(4)); // past kFailDisplaySeconds (3s)
     CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: startup timeout trips Failed phase then returns MainMenu") {
-    using clk = std::chrono::steady_clock;
-    clk::time_point fakeNow = clk::now();
+    fl::ManualClock fakeNow;
 
     std::atomic<bool> ready{false}; // server never starts
     bool onReadyCalled = false;
     LoadingScreen s(ready, [] { return false; }, [&] { onReadyCalled = true; });
-    s.setClockOverride([&] { return fakeNow; });
+    s.setClock(fakeNow);
 
     s.update(g_inp, g_win); // StartingServer; deadline = fakeNow + 10s
 
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // within timeout
     CHECK(!onReadyCalled);
 
-    fakeNow += std::chrono::seconds(11);              // past startup deadline
+    fakeNow.advance(std::chrono::seconds(11));        // past startup deadline
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // → Failed; within kFailDisplaySeconds
     CHECK(!onReadyCalled);
 
@@ -148,23 +159,22 @@ TEST_CASE("LoadingScreen: startup timeout trips Failed phase then returns MainMe
             foundMsg = true;
     CHECK(foundMsg);
 
-    fakeNow += std::chrono::seconds(4); // past kFailDisplaySeconds (3s)
+    fakeNow.advance(std::chrono::seconds(4)); // past kFailDisplaySeconds (3s)
     CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: reset after startup timeout allows successful second session") {
-    using clk = std::chrono::steady_clock;
-    clk::time_point fakeNow = clk::now();
+    fl::ManualClock fakeNow;
 
     std::atomic<bool> ready{false};
     int onReadyCount = 0;
     bool connected = false;
     LoadingScreen s(ready, [&] { return connected; }, [&] { ++onReadyCount; });
-    s.setClockOverride([&] { return fakeNow; });
+    s.setClock(fakeNow);
 
     // First session: startup timeout fires.
     s.update(g_inp, g_win);
-    fakeNow += std::chrono::seconds(11);
+    fakeNow.advance(std::chrono::seconds(11));
     s.update(g_inp, g_win); // → Failed
     CHECK(onReadyCount == 0);
 
@@ -183,37 +193,35 @@ TEST_CASE("LoadingScreen: reset after startup timeout allows successful second s
 }
 
 TEST_CASE("LoadingScreen: reset clears startup deadline so new session gets fresh timeout") {
-    using clk = std::chrono::steady_clock;
-    clk::time_point fakeNow = clk::now();
+    fl::ManualClock fakeNow;
 
     std::atomic<bool> ready{false};
     LoadingScreen s(ready, [] { return false; }, [] {});
-    s.setClockOverride([&] { return fakeNow; });
+    s.setClock(fakeNow);
 
     s.update(g_inp, g_win); // sets start deadline at fakeNow
 
-    fakeNow += std::chrono::seconds(5); // halfway through first session
-    s.reset();                          // clears both deadlines
+    fakeNow.advance(std::chrono::seconds(5)); // halfway through first session
+    s.reset();                                // clears both deadlines
 
     // After reset the next update sets a fresh deadline from current fakeNow.
     s.update(g_inp, g_win);
 
-    fakeNow += std::chrono::seconds(6);               // only 6s into NEW deadline (< 10s)
+    fakeNow.advance(std::chrono::seconds(6));         // only 6s into NEW deadline (< 10s)
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // must NOT have timed out
 }
 
 TEST_CASE("LoadingScreen: spawn fail message shown immediately without timeout") {
-    using clk = std::chrono::steady_clock;
-    clk::time_point fakeNow = clk::now();
+    fl::ManualClock fakeNow;
 
     std::atomic<bool> ready{false};
-    const char* failMsg = nullptr;
-    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, [&] { return failMsg; });
-    s.setClockOverride([&] { return fakeNow; });
+    std::atomic<SessionFailure> failure{SessionFailure::None};
+    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, &failure);
+    s.setClock(fakeNow);
 
-    s.update(g_inp, g_win); // sets start deadline; failMsg still null
+    s.update(g_inp, g_win); // sets start deadline; no failure yet
 
-    failMsg = "Server binary not found.";
+    failure.store(SessionFailure::ServerSpawnFailed);
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
 
     bool found = false;
@@ -222,22 +230,21 @@ TEST_CASE("LoadingScreen: spawn fail message shown immediately without timeout")
             found = true;
     CHECK(found);
 
-    fakeNow += std::chrono::seconds(4); // past kFailDisplaySeconds (3 s)
+    fakeNow.advance(std::chrono::seconds(4)); // past kFailDisplaySeconds (3 s)
     CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: bind fail message shown immediately without timeout") {
-    using clk = std::chrono::steady_clock;
-    clk::time_point fakeNow = clk::now();
+    fl::ManualClock fakeNow;
 
     std::atomic<bool> ready{false};
-    const char* failMsg = nullptr;
-    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, [&] { return failMsg; });
-    s.setClockOverride([&] { return fakeNow; });
+    std::atomic<SessionFailure> failure{SessionFailure::None};
+    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, &failure);
+    s.setClock(fakeNow);
 
     s.update(g_inp, g_win); // sets start deadline
 
-    failMsg = "Port already in use.";
+    failure.store(SessionFailure::ServerBindFailed);
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
 
     bool found = false;
@@ -246,22 +253,21 @@ TEST_CASE("LoadingScreen: bind fail message shown immediately without timeout") 
             found = true;
     CHECK(found);
 
-    fakeNow += std::chrono::seconds(4);
+    fakeNow.advance(std::chrono::seconds(4));
     CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: server timeout fail message shown immediately without timeout") {
-    using clk = std::chrono::steady_clock;
-    clk::time_point fakeNow = clk::now();
+    fl::ManualClock fakeNow;
 
     std::atomic<bool> ready{false};
-    const char* failMsg = nullptr;
-    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, [&] { return failMsg; });
-    s.setClockOverride([&] { return fakeNow; });
+    std::atomic<SessionFailure> failure{SessionFailure::None};
+    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, &failure);
+    s.setClock(fakeNow);
 
     s.update(g_inp, g_win); // sets start deadline
 
-    failMsg = "Server startup timed out.";
+    failure.store(SessionFailure::ServerStartTimeout);
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
 
     bool found = false;
@@ -270,22 +276,21 @@ TEST_CASE("LoadingScreen: server timeout fail message shown immediately without 
             found = true;
     CHECK(found);
 
-    fakeNow += std::chrono::seconds(4);
+    fakeNow.advance(std::chrono::seconds(4));
     CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: fallback generic message shown on startup deadline with no fail msg") {
-    using clk = std::chrono::steady_clock;
-    clk::time_point fakeNow = clk::now();
+    fl::ManualClock fakeNow;
 
     std::atomic<bool> ready{false};
     // No getStartFailMsg — simulates a hung start() that never returns.
     LoadingScreen s(ready, [] { return false; }, [] {});
-    s.setClockOverride([&] { return fakeNow; });
+    s.setClock(fakeNow);
 
     s.update(g_inp, g_win); // sets start deadline at fakeNow + 10 s
 
-    fakeNow += std::chrono::seconds(11);              // past startup deadline
+    fakeNow.advance(std::chrono::seconds(11));        // past startup deadline
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
 
     bool found = false;
@@ -294,24 +299,21 @@ TEST_CASE("LoadingScreen: fallback generic message shown on startup deadline wit
             found = true;
     CHECK(found);
 
-    fakeNow += std::chrono::seconds(4);
+    fakeNow.advance(std::chrono::seconds(4));
     CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: version mismatch shown immediately in Connecting phase") {
-    using clk = std::chrono::steady_clock;
-    clk::time_point fakeNow = clk::now();
+    fl::ManualClock fakeNow;
 
     std::atomic<bool> ready{true}; // multiplayer fast-path: skip StartingServer
-    const char* connectMsg = nullptr;
-    LoadingScreen s(
-        ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false,
-        /*getStartFailMsg=*/nullptr, [&] { return connectMsg; });
-    s.setClockOverride([&] { return fakeNow; });
+    std::atomic<SessionFailure> failure{SessionFailure::None};
+    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false, &failure);
+    s.setClock(fakeNow);
 
     s.update(g_inp, g_win); // StartingServer -> Connecting (serverReady already true)
 
-    connectMsg = "Server version mismatch.";
+    failure.store(SessionFailure::VersionMismatch);
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed, within kFailDisplaySeconds
 
     bool found = false;
@@ -320,24 +322,21 @@ TEST_CASE("LoadingScreen: version mismatch shown immediately in Connecting phase
             found = true;
     CHECK(found);
 
-    fakeNow += std::chrono::seconds(4); // past kFailDisplaySeconds (3 s)
+    fakeNow.advance(std::chrono::seconds(4)); // past kFailDisplaySeconds (3 s)
     CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: connection refused shown immediately in Connecting phase") {
-    using clk = std::chrono::steady_clock;
-    clk::time_point fakeNow = clk::now();
+    fl::ManualClock fakeNow;
 
     std::atomic<bool> ready{true};
-    const char* connectMsg = nullptr;
-    LoadingScreen s(
-        ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false,
-        /*getStartFailMsg=*/nullptr, [&] { return connectMsg; });
-    s.setClockOverride([&] { return fakeNow; });
+    std::atomic<SessionFailure> failure{SessionFailure::None};
+    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false, &failure);
+    s.setClock(fakeNow);
 
     s.update(g_inp, g_win); // -> Connecting
 
-    connectMsg = "Connection refused by server.";
+    failure.store(SessionFailure::ConnectionRefused);
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed
 
     bool found = false;
@@ -346,24 +345,21 @@ TEST_CASE("LoadingScreen: connection refused shown immediately in Connecting pha
             found = true;
     CHECK(found);
 
-    fakeNow += std::chrono::seconds(4);
+    fakeNow.advance(std::chrono::seconds(4));
     CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: getConnectFailMsg null does not break timeout path") {
-    using clk = std::chrono::steady_clock;
-    clk::time_point fakeNow = clk::now();
+    fl::ManualClock fakeNow;
 
     std::atomic<bool> ready{true};
     // callback wired but always returns null
-    LoadingScreen s(
-        ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false,
-        /*getStartFailMsg=*/nullptr, [] { return static_cast<const char*>(nullptr); });
-    s.setClockOverride([&] { return fakeNow; });
+    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/false);
+    s.setClock(fakeNow);
 
     s.update(g_inp, g_win); // -> Connecting
 
-    fakeNow += std::chrono::seconds(11);              // past connect deadline
+    fakeNow.advance(std::chrono::seconds(11));        // past connect deadline
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed via timeout
 
     bool found = false;
@@ -372,16 +368,14 @@ TEST_CASE("LoadingScreen: getConnectFailMsg null does not break timeout path") {
             found = true;
     CHECK(found);
 
-    fakeNow += std::chrono::seconds(4);
+    fakeNow.advance(std::chrono::seconds(4));
     CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
 }
 
 TEST_CASE("LoadingScreen: getConnectFailMsg null does not break success path") {
     std::atomic<bool> ready{true};
     bool connected = false;
-    LoadingScreen s(
-        ready, [&] { return connected; }, [] {}, /*isSinglePlayer=*/false,
-        /*getStartFailMsg=*/nullptr, [] { return static_cast<const char*>(nullptr); });
+    LoadingScreen s(ready, [&] { return connected; }, [] {}, /*isSinglePlayer=*/false);
 
     s.update(g_inp, g_win); // -> Connecting
     connected = true;
@@ -390,21 +384,18 @@ TEST_CASE("LoadingScreen: getConnectFailMsg null does not break success path") {
 }
 
 TEST_CASE("LoadingScreen: version mismatch in single-player flow") {
-    using clk = std::chrono::steady_clock;
-    clk::time_point fakeNow = clk::now();
+    fl::ManualClock fakeNow;
 
     std::atomic<bool> ready{false};
-    const char* connectMsg = nullptr;
-    LoadingScreen s(
-        ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true,
-        /*getStartFailMsg=*/nullptr, [&] { return connectMsg; });
-    s.setClockOverride([&] { return fakeNow; });
+    std::atomic<SessionFailure> failure{SessionFailure::None};
+    LoadingScreen s(ready, [] { return false; }, [] {}, /*isSinglePlayer=*/true, &failure);
+    s.setClock(fakeNow);
 
     s.update(g_inp, g_win); // StartingServer; deadline set
     ready.store(true);
     s.update(g_inp, g_win); // -> Connecting; onServerReady fires
 
-    connectMsg = "Server version mismatch.";
+    failure.store(SessionFailure::VersionMismatch);
     CHECK(s.update(g_inp, g_win) == Screen::Loading); // -> Failed immediately
 
     bool found = false;
@@ -413,7 +404,7 @@ TEST_CASE("LoadingScreen: version mismatch in single-player flow") {
             found = true;
     CHECK(found);
 
-    fakeNow += std::chrono::seconds(4);
+    fakeNow.advance(std::chrono::seconds(4));
     CHECK(s.update(g_inp, g_win) == Screen::MainMenu);
 }
 
