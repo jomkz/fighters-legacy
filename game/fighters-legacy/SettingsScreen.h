@@ -16,8 +16,8 @@ class IRenderer;
 class IWindow;
 class UserConfig;
 
-// Settings screen: graphics (resolution, display, vsync, AA, draw distance)
-// and audio (master/music/SFX volumes).
+// Settings screen: graphics (resolution, display, vsync, AA mode, shadow quality,
+// particle density, draw distance) and audio (master/music/SFX volumes).
 // Copies UserConfig on entry; saves and applies on Back/Escape.
 class SettingsScreen : public IScreen {
   public:
@@ -46,9 +46,10 @@ class SettingsScreen : public IScreen {
     int m_modeIdx{0};                         // current selection in m_modes
     bool m_fullscreen{false};
 
-    // 0=Resolution, 1=Display, 2=Vsync, 3=AA, 4=DrawDist, 5=MasterVol, 6=MusicVol, 7=SfxVol, 8=Back
+    // 0=Resolution, 1=Display, 2=Vsync, 3=AAMode, 4=ShadowQuality, 5=ParticleDensity,
+    // 6=DrawDist, 7=MasterVol, 8=MusicVol, 9=SfxVol, 10=Back
     int m_focusedRow{0};
-    static constexpr int kRowCount = 9;
+    static constexpr int kRowCount = 11;
 
     void applyAndSave();
     void buildModes();

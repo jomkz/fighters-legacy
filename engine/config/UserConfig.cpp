@@ -139,6 +139,104 @@ static QualityLevel parseQualityLevel(const char* s) {
     return QualityLevel::High;
 }
 
+static const char* aaModeString(AntiAliasingMode m) {
+    switch (m) {
+    case AntiAliasingMode::Off:
+        return "off";
+    case AntiAliasingMode::FXAA:
+        return "fxaa";
+    case AntiAliasingMode::MSAA2x:
+        return "msaa2x";
+    case AntiAliasingMode::MSAA4x:
+        return "msaa4x";
+    case AntiAliasingMode::MSAA8x:
+        return "msaa8x";
+    }
+    return "fxaa";
+}
+
+static AntiAliasingMode parseAaMode(const char* s, ILogger& log) {
+    if (!s)
+        return AntiAliasingMode::FXAA;
+    if (std::strcmp(s, "off") == 0)
+        return AntiAliasingMode::Off;
+    if (std::strcmp(s, "fxaa") == 0)
+        return AntiAliasingMode::FXAA;
+    if (std::strcmp(s, "msaa2x") == 0)
+        return AntiAliasingMode::MSAA2x;
+    if (std::strcmp(s, "msaa4x") == 0)
+        return AntiAliasingMode::MSAA4x;
+    if (std::strcmp(s, "msaa8x") == 0)
+        return AntiAliasingMode::MSAA8x;
+    log.log(LogLevel::Warn, __FILE__, __LINE__,
+            (std::string("user config: unknown aa_mode '") + s + "', defaulting to fxaa").c_str());
+    return AntiAliasingMode::FXAA;
+}
+
+static const char* shadowQualityString(ShadowQuality q) {
+    switch (q) {
+    case ShadowQuality::Off:
+        return "off";
+    case ShadowQuality::Low:
+        return "low";
+    case ShadowQuality::Medium:
+        return "medium";
+    case ShadowQuality::High:
+        return "high";
+    case ShadowQuality::Ultra:
+        return "ultra";
+    }
+    return "high";
+}
+
+static ShadowQuality parseShadowQuality(const char* s, ILogger& log) {
+    if (!s)
+        return ShadowQuality::High;
+    if (std::strcmp(s, "off") == 0)
+        return ShadowQuality::Off;
+    if (std::strcmp(s, "low") == 0)
+        return ShadowQuality::Low;
+    if (std::strcmp(s, "medium") == 0)
+        return ShadowQuality::Medium;
+    if (std::strcmp(s, "high") == 0)
+        return ShadowQuality::High;
+    if (std::strcmp(s, "ultra") == 0)
+        return ShadowQuality::Ultra;
+    log.log(LogLevel::Warn, __FILE__, __LINE__,
+            (std::string("user config: unknown shadow_quality '") + s + "', defaulting to high").c_str());
+    return ShadowQuality::High;
+}
+
+static const char* particleDensityString(ParticleDensity d) {
+    switch (d) {
+    case ParticleDensity::Low:
+        return "low";
+    case ParticleDensity::Medium:
+        return "medium";
+    case ParticleDensity::High:
+        return "high";
+    case ParticleDensity::Ultra:
+        return "ultra";
+    }
+    return "high";
+}
+
+static ParticleDensity parseParticleDensity(const char* s, ILogger& log) {
+    if (!s)
+        return ParticleDensity::High;
+    if (std::strcmp(s, "low") == 0)
+        return ParticleDensity::Low;
+    if (std::strcmp(s, "medium") == 0)
+        return ParticleDensity::Medium;
+    if (std::strcmp(s, "high") == 0)
+        return ParticleDensity::High;
+    if (std::strcmp(s, "ultra") == 0)
+        return ParticleDensity::Ultra;
+    log.log(LogLevel::Warn, __FILE__, __LINE__,
+            (std::string("user config: unknown particle_density '") + s + "', defaulting to high").c_str());
+    return ParticleDensity::High;
+}
+
 static const char* drawDistanceString(DrawDistance d) {
     switch (d) {
     case DrawDistance::Low:
@@ -541,7 +639,18 @@ bool UserConfig::load() {
         m_graphics.drawDistance = parsed;
     }
 
-    m_graphics.antiAliasing = tbl["graphics"]["anti_aliasing"].value_or(true);
+    if (auto v = tbl["graphics"]["aa_mode"].value<std::string>()) {
+        m_graphics.aaMode = parseAaMode(v->c_str(), m_logger);
+    } else if (auto b = tbl["graphics"]["anti_aliasing"].value<bool>()) {
+        // Migrate old bool: true → FXAA, false → Off
+        m_graphics.aaMode = *b ? AntiAliasingMode::FXAA : AntiAliasingMode::Off;
+    }
+
+    if (auto v = tbl["graphics"]["shadow_quality"].value<std::string>())
+        m_graphics.shadowQuality = parseShadowQuality(v->c_str(), m_logger);
+
+    if (auto v = tbl["graphics"]["particle_density"].value<std::string>())
+        m_graphics.particleDensity = parseParticleDensity(v->c_str(), m_logger);
 
     if (auto v = tbl["graphics"]["ui_scale"].value<int64_t>()) {
         UiScale parsed = parseUiScale(static_cast<int>(*v));
@@ -712,7 +821,9 @@ bool UserConfig::save() {
     graphics.insert_or_assign("frame_rate_cap", frameRateCapString(m_graphics.frameRateCap));
     graphics.insert_or_assign("quality_preset", qualityLevelString(m_graphics.qualityPreset));
     graphics.insert_or_assign("draw_distance", drawDistanceString(m_graphics.drawDistance));
-    graphics.insert_or_assign("anti_aliasing", m_graphics.antiAliasing);
+    graphics.insert_or_assign("aa_mode", aaModeString(m_graphics.aaMode));
+    graphics.insert_or_assign("shadow_quality", shadowQualityString(m_graphics.shadowQuality));
+    graphics.insert_or_assign("particle_density", particleDensityString(m_graphics.particleDensity));
     graphics.insert_or_assign("ui_scale", static_cast<int64_t>(uiScaleInt(m_graphics.uiScale)));
     graphics.insert_or_assign("cockpit_fov", static_cast<int64_t>(m_graphics.cockpitFov));
 

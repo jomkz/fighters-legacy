@@ -25,6 +25,52 @@ static float drawDistKm(DrawDistance d) {
     return 50.0f;
 }
 
+static const char* aaModeLabel(AntiAliasingMode m) {
+    switch (m) {
+    case AntiAliasingMode::Off:
+        return "Off";
+    case AntiAliasingMode::FXAA:
+        return "FXAA";
+    case AntiAliasingMode::MSAA2x:
+        return "MSAA 2x";
+    case AntiAliasingMode::MSAA4x:
+        return "MSAA 4x";
+    case AntiAliasingMode::MSAA8x:
+        return "MSAA 8x";
+    }
+    return "FXAA";
+}
+
+static const char* shadowQualityLabel(ShadowQuality q) {
+    switch (q) {
+    case ShadowQuality::Off:
+        return "Off";
+    case ShadowQuality::Low:
+        return "Low";
+    case ShadowQuality::Medium:
+        return "Medium";
+    case ShadowQuality::High:
+        return "High";
+    case ShadowQuality::Ultra:
+        return "Ultra";
+    }
+    return "High";
+}
+
+static const char* particleDensityLabel(ParticleDensity d) {
+    switch (d) {
+    case ParticleDensity::Low:
+        return "Low";
+    case ParticleDensity::Medium:
+        return "Medium";
+    case ParticleDensity::High:
+        return "High";
+    case ParticleDensity::Ultra:
+        return "Ultra";
+    }
+    return "High";
+}
+
 static const char* vsyncLabel(VsyncMode v) {
     switch (v) {
     case VsyncMode::Off:
@@ -104,7 +150,10 @@ void SettingsScreen::applyAndSave() {
         rs.vsync = RendererVsyncMode::Adaptive;
         break;
     }
-    rs.antiAliasing = m_graphics.antiAliasing;
+    // Ordinals must stay in sync with the enum definitions in both headers.
+    rs.aaMode = static_cast<RendererAAMode>(m_graphics.aaMode);
+    rs.shadowQuality = static_cast<RendererShadowQuality>(m_graphics.shadowQuality);
+    rs.particleDensity = static_cast<RendererParticleDensity>(m_graphics.particleDensity);
     rs.bloom = true; // not surfaced in Phase 2 settings
     rs.drawDistanceKm = drawDistKm(m_graphics.drawDistance);
     m_renderer.applySettings(rs);
@@ -164,30 +213,39 @@ Screen SettingsScreen::update(IInput& input, IWindow& window) {
         if (left || right || scroll != 0.f)
             m_graphics.vsync = static_cast<VsyncMode>((static_cast<int>(m_graphics.vsync) + 1) % 3);
         break;
-    case 3: // Anti-aliasing
+    case 3: // Anti-aliasing mode
         if (left || right || scroll != 0.f)
-            m_graphics.antiAliasing = !m_graphics.antiAliasing;
+            m_graphics.aaMode = static_cast<AntiAliasingMode>((static_cast<int>(m_graphics.aaMode) + 1) % 5);
         break;
-    case 4: // Draw distance
+    case 4: // Shadow quality
+        if (left || right || scroll != 0.f)
+            m_graphics.shadowQuality = static_cast<ShadowQuality>((static_cast<int>(m_graphics.shadowQuality) + 1) % 5);
+        break;
+    case 5: // Particle density
+        if (left || right || scroll != 0.f)
+            m_graphics.particleDensity =
+                static_cast<ParticleDensity>((static_cast<int>(m_graphics.particleDensity) + 1) % 4);
+        break;
+    case 6: // Draw distance
         if (left || right || scroll != 0.f)
             m_graphics.drawDistance = static_cast<DrawDistance>((static_cast<int>(m_graphics.drawDistance) + 1) % 4);
         break;
-    case 5: { // Master volume
+    case 7: { // Master volume
         float delta = (right ? step : 0.f) + (left ? -step : 0.f) + scrollStep * scroll;
         m_audio.masterVolume = std::clamp(m_audio.masterVolume + delta, 0.f, 1.f);
         break;
     }
-    case 6: { // Music volume
+    case 8: { // Music volume
         float delta = (right ? step : 0.f) + (left ? -step : 0.f) + scrollStep * scroll;
         m_audio.musicVolume = std::clamp(m_audio.musicVolume + delta, 0.f, 1.f);
         break;
     }
-    case 7: { // SFX volume
+    case 9: { // SFX volume
         float delta = (right ? step : 0.f) + (left ? -step : 0.f) + scrollStep * scroll;
         m_audio.sfxVolume = std::clamp(m_audio.sfxVolume + delta, 0.f, 1.f);
         break;
     }
-    case 8:
+    case 10:
         break; // Back — handled below
     }
 
@@ -196,7 +254,7 @@ Screen SettingsScreen::update(IInput& input, IWindow& window) {
                          input.isGamepadButtonJustPressed(0, GamepadButton::A);
     const bool back = input.isKeyJustPressed(Key::Escape) || input.isGamepadButtonJustPressed(0, GamepadButton::B);
 
-    if ((confirm && m_focusedRow == 8) || back) {
+    if ((confirm && m_focusedRow == 10) || back) {
         applyAndSave();
         return m_returnTarget;
     }
@@ -280,13 +338,15 @@ std::span<const HudElement> SettingsScreen::buildElements() {
     row(0, 0.20f, "Resolution:", resVal);
     row(1, 0.27f, "Display:", m_fullscreen ? "Fullscreen" : "Windowed");
     row(2, 0.34f, "Vsync:", vsyncLabel(m_graphics.vsync));
-    row(3, 0.41f, "Anti-aliasing:", m_graphics.antiAliasing ? "On" : "Off");
-    row(4, 0.48f, "Draw distance:", drawDistLabel(m_graphics.drawDistance));
+    row(3, 0.41f, "Anti-aliasing:", aaModeLabel(m_graphics.aaMode));
+    row(4, 0.48f, "Shadow quality:", shadowQualityLabel(m_graphics.shadowQuality));
+    row(5, 0.55f, "Particle density:", particleDensityLabel(m_graphics.particleDensity));
+    row(6, 0.62f, "Draw distance:", drawDistLabel(m_graphics.drawDistance));
 
     auto volStr = [](float v) { return std::to_string(static_cast<int>(std::round(v * 100.f))) + "%"; };
-    row(5, 0.58f, "Master volume:", volStr(m_audio.masterVolume));
-    row(6, 0.65f, "Music volume:", volStr(m_audio.musicVolume));
-    row(7, 0.72f, "SFX volume:", volStr(m_audio.sfxVolume));
+    row(7, 0.72f, "Master volume:", volStr(m_audio.masterVolume));
+    row(8, 0.79f, "Music volume:", volStr(m_audio.musicVolume));
+    row(9, 0.86f, "SFX volume:", volStr(m_audio.sfxVolume));
 
     // Back button
     m_strings[static_cast<std::size_t>(si)] = "[ Back ]";
@@ -296,10 +356,10 @@ std::span<const HudElement> SettingsScreen::buildElements() {
         el.type = HudElement::Type::Text;
         el.text = m_strings[static_cast<std::size_t>(si++)];
         el.x = 0.5f;
-        el.y = 0.82f;
-        el.r = (m_focusedRow == 8) ? 0.2f : 0.7f;
-        el.g = (m_focusedRow == 8) ? 1.0f : 0.7f;
-        el.b = (m_focusedRow == 8) ? 0.2f : 0.7f;
+        el.y = 0.93f;
+        el.r = (m_focusedRow == 10) ? 0.2f : 0.7f;
+        el.g = (m_focusedRow == 10) ? 1.0f : 0.7f;
+        el.b = (m_focusedRow == 10) ? 0.2f : 0.7f;
         el.a = 1.f;
     }
 

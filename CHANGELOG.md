@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+
+- **renderer**: AA mode selector (Off / FXAA / MSAA 2x–8x stub) in Settings screen, replacing the on/off AA toggle; MSAA modes fall back to FXAA with a warning until GPU implementation lands (#235)
+- **renderer**: Shadow quality setting (Off / Low / Medium / High / Ultra) in Settings screen; runtime shadow atlas resize with configurable cascade count (0–4) (#235)
+- **renderer**: Particle density setting (Low / Medium / High / Ultra) in Settings screen; runtime SSBO resize (512–16384 particle slots) (#235)
+
+### Fixed
+
+- **game**: Draw distance km values at startup (Low=20, Medium=50, High=100, Ultra=200) now match the values applied when the user saves from Settings screen
+
 ## [0.2.3] - 2026-06-15
 
 ### Added

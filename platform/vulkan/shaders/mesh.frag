@@ -19,7 +19,8 @@ layout(set = 0, binding = 1) uniform LightUBO {
 
 layout(set = 0, binding = 2) uniform ShadowUBO {
     mat4 lightViewProj[4]; // one per cascade (absolute world space)
-    vec4 splitDepths;      // x/y/z = view-space end of cascades 0/1/2
+    vec4 splitDepths;      // x/y/z = view-space end of cascades 0/1/2, w = shadow far
+    uint numCascades;      // active cascade count; 0 = shadows disabled
 } shadow;
 
 layout(set = 0, binding = 3) uniform sampler2DArrayShadow shadowMap;
@@ -76,12 +77,18 @@ vec3 FresnelSchlick(float cosTheta, vec3 F0) {
 // ── Shadow sampling ──────────────────────────────────────────────────────────
 
 float sampleShadow(vec3 camRelWorldPos, float viewDepth) {
+    if (shadow.numCascades == 0u)
+        return 1.0;
+
     // Select cascade based on view-space distance.
     uint cascade;
     if      (viewDepth < shadow.splitDepths.x) cascade = 0u;
     else if (viewDepth < shadow.splitDepths.y) cascade = 1u;
     else if (viewDepth < shadow.splitDepths.z) cascade = 2u;
     else                                        cascade = 3u;
+    // Clamp to the number of active cascades; unused split entries are set to
+    // kShadowFar so they never trigger the above branches when numCascades < 4.
+    cascade = min(cascade, shadow.numCascades - 1u);
 
     // lightViewProj was built for absolute world space.
     vec3 absPos   = camRelWorldPos + camera.worldOrigin.xyz;

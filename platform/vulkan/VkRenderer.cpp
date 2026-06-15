@@ -161,12 +161,17 @@ static bool createHostBuffer(VkDevice device, VkPhysicalDevice physDevice, VkDev
 // Shadow resources — 2D array depth image for kNumCascades CSM cascades
 // ---------------------------------------------------------------------------
 bool VkRenderer::createShadowResources() {
+    // Use max(1, m_numCascades) layers so the descriptor binding is always valid
+    // even when shadows are disabled (numCascades=0); the shader guards on numCascades.
+    const uint32_t layers = (m_numCascades > 0u) ? m_numCascades : 1u;
+    const uint32_t res = (m_shadowRes > 0u) ? m_shadowRes : 1u;
+
     VkImageCreateInfo imageCI{};
     imageCI.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageCI.imageType = VK_IMAGE_TYPE_2D;
-    imageCI.extent = {kShadowRes, kShadowRes, 1};
+    imageCI.extent = {res, res, 1};
     imageCI.mipLevels = 1;
-    imageCI.arrayLayers = kNumCascades;
+    imageCI.arrayLayers = layers;
     imageCI.format = kDepthFormat;
     imageCI.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageCI.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -197,14 +202,14 @@ bool VkRenderer::createShadowResources() {
     arrayViewCI.image = m_shadowImage;
     arrayViewCI.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
     arrayViewCI.format = kDepthFormat;
-    arrayViewCI.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, kNumCascades};
+    arrayViewCI.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, layers};
     if (vkCreateImageView(m_device, &arrayViewCI, nullptr, &m_shadowArrayView) != VK_SUCCESS) {
         m_lastError = "vkCreateImageView (shadow array) failed";
         return false;
     }
 
-    // Per-cascade layer views for rendering.
-    for (uint32_t i = 0; i < kNumCascades; ++i) {
+    // Per-cascade layer views for rendering (only active cascades).
+    for (uint32_t i = 0; i < m_numCascades; ++i) {
         VkImageViewCreateInfo layerCI{};
         layerCI.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         layerCI.image = m_shadowImage;
@@ -261,11 +266,98 @@ void VkRenderer::destroyShadowResources() {
 }
 
 // ---------------------------------------------------------------------------
-// applySettings — store settings; vsync takes effect on next swapchain recreate
+// Shadow / particle quality helpers
+// ---------------------------------------------------------------------------
+static std::pair<uint32_t, uint32_t> shadowParamsFromQuality(RendererShadowQuality q) {
+    switch (q) {
+    case RendererShadowQuality::Off:
+        return {1u, 0u};
+    case RendererShadowQuality::Low:
+        return {512u, 2u};
+    case RendererShadowQuality::Medium:
+        return {1024u, 3u};
+    case RendererShadowQuality::High:
+        return {2048u, 4u};
+    case RendererShadowQuality::Ultra:
+        return {4096u, 4u};
+    }
+    return {2048u, 4u};
+}
+
+static std::pair<uint32_t, uint32_t> particleParamsFromDensity(RendererParticleDensity d) {
+    switch (d) {
+    case RendererParticleDensity::Low:
+        return {512u, 32u};
+    case RendererParticleDensity::Medium:
+        return {2048u, 128u};
+    case RendererParticleDensity::High:
+        return {8192u, 512u};
+    case RendererParticleDensity::Ultra:
+        return {16384u, 1024u};
+    }
+    return {8192u, 512u};
+}
+
+// ---------------------------------------------------------------------------
+// recreateShadowResources — called from beginFrame() when m_shadowDirty
+// ---------------------------------------------------------------------------
+void VkRenderer::recreateShadowResources() {
+    vkDeviceWaitIdle(m_device);
+    destroyShadowResources();
+    auto [res, cascades] = shadowParamsFromQuality(m_settings.shadowQuality);
+    m_shadowRes = res;
+    m_numCascades = cascades;
+    createShadowResources();
+
+    // Re-bind the shadow sampler + image view in each per-frame descriptor set (binding 3).
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VkDescriptorImageInfo imgInfo{};
+        imgInfo.sampler = m_shadowSampler;
+        imgInfo.imageView = m_shadowArrayView;
+        imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkWriteDescriptorSet w{};
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = m_perFrame[i].descriptorSet;
+        w.dstBinding = 3;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.pImageInfo = &imgInfo;
+        vkUpdateDescriptorSets(m_device, 1, &w, 0, nullptr);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// recreateParticleResources — called from beginFrame() when m_particlesDirty
+// ---------------------------------------------------------------------------
+void VkRenderer::recreateParticleResources() {
+    vkDeviceWaitIdle(m_device);
+    destroyParticleResources();
+    auto [maxP, maxS] = particleParamsFromDensity(m_settings.particleDensity);
+    m_maxParticles = maxP;
+    m_maxSpawnPerFrame = maxS;
+    m_nextParticleSlot = 0;
+    m_spawnAccum.clear();
+    createParticleResources();
+}
+
+// ---------------------------------------------------------------------------
+// applySettings — update settings; trigger resource recreation as needed
 // ---------------------------------------------------------------------------
 void VkRenderer::applySettings(const RendererSettings& settings) {
+    if (settings.aaMode != m_settings.aaMode) {
+        if (settings.aaMode == RendererAAMode::MSAA2x || settings.aaMode == RendererAAMode::MSAA4x ||
+            settings.aaMode == RendererAAMode::MSAA8x) {
+            std::fprintf(stderr, "[VK WARN] MSAA not yet implemented; falling back to FXAA\n");
+        }
+    }
+    if (settings.shadowQuality != m_settings.shadowQuality)
+        m_shadowDirty = true;
+    if (settings.particleDensity != m_settings.particleDensity)
+        m_particlesDirty = true;
+    if (settings.vsync != m_settings.vsync)
+        m_framebufferResized = true;
     m_settings = settings;
-    m_framebufferResized = true; // trigger swapchain recreate on next beginFrame
 }
 
 // ---------------------------------------------------------------------------
@@ -457,6 +549,15 @@ void VkRenderer::beginFrame() {
         m_framebufferResized = false;
     }
 
+    if (m_shadowDirty) {
+        recreateShadowResources();
+        m_shadowDirty = false;
+    }
+    if (m_particlesDirty) {
+        recreateParticleResources();
+        m_particlesDirty = false;
+    }
+
     if (vkWaitForFences(m_device, 1, &m_inFlightFences[m_currentFrame], VK_TRUE, 100'000'000ULL) == VK_TIMEOUT)
         return;
 
@@ -527,23 +628,32 @@ void VkRenderer::computeCascades(const FrameScene& scene, ShadowUBO& out) {
     const glm::vec3 lightDir = -sunDir; // from sun toward scene
     const glm::vec3 worldUp = (std::abs(lightDir.y) > 0.99f) ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
 
+    out.numCascades = m_numCascades;
+    if (m_numCascades == 0u) {
+        out.splitDepths = glm::vec4(kShadowFar);
+        return;
+    }
+
     // PSSM split distances (view-space positive distances from camera).
-    float splits[kNumCascades + 1];
+    // Fixed-size array (kNumCascades+1 = 5) avoids a VLA on MSVC.
+    float splits[5]{};
     splits[0] = kShadowNear;
-    splits[kNumCascades] = kShadowFar;
-    for (uint32_t i = 1; i < kNumCascades; ++i) {
-        const float p = float(i) / float(kNumCascades);
+    splits[m_numCascades] = kShadowFar;
+    for (uint32_t i = 1; i < m_numCascades; ++i) {
+        const float p = float(i) / float(m_numCascades);
         const float lg = kShadowNear * std::pow(kShadowFar / kShadowNear, p);
         const float uni = kShadowNear + (kShadowFar - kShadowNear) * p;
         splits[i] = kLambda * lg + (1.0f - kLambda) * uni;
     }
-    // Store cascade end distances for the fragment shader.
-    out.splitDepths = glm::vec4(splits[1], splits[2], splits[3], kShadowFar);
+    // Store cascade end distances for the fragment shader; unused slots default to kShadowFar.
+    out.splitDepths =
+        glm::vec4(m_numCascades > 1u ? splits[1] : kShadowFar, m_numCascades > 2u ? splits[2] : kShadowFar,
+                  m_numCascades > 3u ? splits[3] : kShadowFar, kShadowFar);
 
     // proj[3][2] = camera near plane (for infinite reverse-Z perspective).
     const float nearVal = proj[3][2];
 
-    for (uint32_t c = 0; c < kNumCascades; ++c) {
+    for (uint32_t c = 0; c < m_numCascades; ++c) {
         const float nearDist = splits[c];
         const float farDist = splits[c + 1];
 
@@ -574,7 +684,7 @@ void VkRenderer::computeCascades(const FrameScene& scene, ShadowUBO& out) {
         for (const auto& v : corners)
             radius = glm::max(radius, glm::length(v - center));
         // Snap to texel increments for stability (prevents shadow swimming).
-        const float texelSize = (2.0f * radius) / float(kShadowRes);
+        const float texelSize = (2.0f * radius) / float(m_shadowRes > 0u ? m_shadowRes : 1u);
         radius = std::ceil(radius / texelSize) * texelSize;
 
         const glm::vec3 eye = center - lightDir * (radius + 1.0f);
@@ -2134,7 +2244,7 @@ static float lcgFloat(uint32_t& seed) {
 }
 
 bool VkRenderer::createParticleResources() {
-    const VkDeviceSize poolSize = kMaxParticles * sizeof(GpuParticle);
+    const VkDeviceSize poolSize = m_maxParticles * sizeof(GpuParticle);
 
     // ── Particle pool SSBO (device-local) ────────────────────────────────
     {
@@ -2162,7 +2272,7 @@ bool VkRenderer::createParticleResources() {
     }
 
     // ── Per-frame host-visible spawn staging buffers ──────────────────────
-    const VkDeviceSize spawnSize = kMaxSpawnPerFrame * sizeof(GpuParticle);
+    const VkDeviceSize spawnSize = m_maxSpawnPerFrame * sizeof(GpuParticle);
     for (auto& spf : m_particleSpawn) {
         VkDeviceMemory mem;
         if (!createHostBuffer(m_device, m_physicalDevice, spawnSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, spf.buf, mem,
@@ -2257,7 +2367,7 @@ bool VkRenderer::createParticleResources() {
             return false;
         }
 
-        VkDescriptorBufferInfo poolBuf{m_particlePoolBuf, 0, kMaxParticles * sizeof(GpuParticle)};
+        VkDescriptorBufferInfo poolBuf{m_particlePoolBuf, 0, m_maxParticles * sizeof(GpuParticle)};
         VkWriteDescriptorSet w{};
         w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w.dstSet = m_particleComputeSet;
@@ -2295,7 +2405,7 @@ bool VkRenderer::createParticleResources() {
                 return false;
             }
 
-            VkDescriptorBufferInfo poolBuf{m_particlePoolBuf, 0, kMaxParticles * sizeof(GpuParticle)};
+            VkDescriptorBufferInfo poolBuf{m_particlePoolBuf, 0, m_maxParticles * sizeof(GpuParticle)};
             VkDescriptorBufferInfo camInfo{m_perFrame[i].cameraBuffer, 0, sizeof(CameraUBO)};
             const std::array<VkWriteDescriptorSet, 2> writes{{
                 {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_particleRenderSets[i], 0, 0, 1,
@@ -2578,7 +2688,7 @@ void VkRenderer::recordParticleCompute(VkCommandBuffer cmd, float dt) {
         const glm::vec3 tan = glm::normalize(glm::cross(dir, ref));
         const glm::vec3 bitan = glm::cross(tan, dir);
 
-        for (uint32_t s = 0; s < toSpawn && spawnCount < kMaxSpawnPerFrame; ++s, ++spawnCount) {
+        for (uint32_t s = 0; s < toSpawn && spawnCount < m_maxSpawnPerFrame; ++s, ++spawnCount) {
             // LCG-based random velocity in hemisphere centred on emitDirection.
             uint32_t seed = m_nextParticleSlot * 2654435761u ^ (s * 2246822519u) ^
                             static_cast<uint32_t>(m_totalFrames * 0x9e3779b97f4a7c15ULL);
@@ -2601,7 +2711,7 @@ void VkRenderer::recordParticleCompute(VkCommandBuffer cmd, float dt) {
             p._pad = 0.0f;
 
             spawnBuf[spawnCount] = p;
-            m_nextParticleSlot = (m_nextParticleSlot + 1) % kMaxParticles;
+            m_nextParticleSlot = (m_nextParticleSlot + 1) % m_maxParticles;
         }
     }
 
@@ -2621,15 +2731,15 @@ void VkRenderer::recordParticleCompute(VkCommandBuffer cmd, float dt) {
 
         // Copy spawned particles into the pool using the ring-buffer pointer.
         // Handle wrap-around with up to two copy regions.
-        const uint32_t startSlot = (m_nextParticleSlot + kMaxParticles - spawnCount) % kMaxParticles;
+        const uint32_t startSlot = (m_nextParticleSlot + m_maxParticles - spawnCount) % m_maxParticles;
         const uint32_t endSlot = startSlot + spawnCount;
 
-        if (endSlot <= kMaxParticles) {
+        if (endSlot <= m_maxParticles) {
             VkBufferCopy region{0, startSlot * sizeof(GpuParticle), spawnCount * sizeof(GpuParticle)};
             vkCmdCopyBuffer(cmd, m_particleSpawn[m_currentFrame].buf, m_particlePoolBuf, 1, &region);
         } else {
             // Split: copy tail of ring then wrap to front.
-            const uint32_t tailCount = kMaxParticles - startSlot;
+            const uint32_t tailCount = m_maxParticles - startSlot;
             const uint32_t headCount = spawnCount - tailCount;
             const std::array<VkBufferCopy, 2> regions{{
                 {0, startSlot * sizeof(GpuParticle), tailCount * sizeof(GpuParticle)},
@@ -2648,7 +2758,7 @@ void VkRenderer::recordParticleCompute(VkCommandBuffer cmd, float dt) {
         transferToCompute.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         transferToCompute.buffer = m_particlePoolBuf;
         transferToCompute.offset = 0;
-        transferToCompute.size = kMaxParticles * sizeof(GpuParticle);
+        transferToCompute.size = m_maxParticles * sizeof(GpuParticle);
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
                              1, &transferToCompute, 0, nullptr);
     }
@@ -2660,12 +2770,12 @@ void VkRenderer::recordParticleCompute(VkCommandBuffer cmd, float dt) {
 
     ParticleSimPush push{};
     push.dt = dt;
-    push.count = kMaxParticles;
+    push.count = m_maxParticles;
     push.gravity = -2.0f; // slow upward drift for smoke, negligible for fast-moving fire
     push._pad = 0.0f;
     vkCmdPushConstants(cmd, m_particleComputeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ParticleSimPush), &push);
 
-    const uint32_t groups = (kMaxParticles + 63u) / 64u;
+    const uint32_t groups = (m_maxParticles + 63u) / 64u;
     vkCmdDispatch(cmd, groups, 1, 1);
 
     // Barrier: COMPUTE_SHADER_WRITE → VERTEX_SHADER_READ (for particle.vert).
@@ -2677,7 +2787,7 @@ void VkRenderer::recordParticleCompute(VkCommandBuffer cmd, float dt) {
     computeToVertex.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     computeToVertex.buffer = m_particlePoolBuf;
     computeToVertex.offset = 0;
-    computeToVertex.size = kMaxParticles * sizeof(GpuParticle);
+    computeToVertex.size = m_maxParticles * sizeof(GpuParticle);
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, 0, 0, nullptr,
                          1, &computeToVertex, 0, nullptr);
 }
@@ -2696,13 +2806,13 @@ void VkRenderer::recordParticleDraw(VkCommandBuffer cmd) {
     uint32_t renderAdditive = 1u;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_particleAdditPipeline);
     vkCmdPushConstants(cmd, m_particleRenderLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(uint32_t), &renderAdditive);
-    vkCmdDraw(cmd, 6, kMaxParticles, 0, 0);
+    vkCmdDraw(cmd, 6, m_maxParticles, 0, 0);
 
     // Alpha-blend pass (smoke): renderAdditive=0 — vertex shader clips additive particles.
     renderAdditive = 0u;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_particleAlphaPipeline);
     vkCmdPushConstants(cmd, m_particleRenderLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(uint32_t), &renderAdditive);
-    vkCmdDraw(cmd, 6, kMaxParticles, 0, 0);
+    vkCmdDraw(cmd, 6, m_maxParticles, 0, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -3119,13 +3229,20 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     recordParticleCompute(cmd, m_frameDt);
 
     // ── Shadow map (all cascades) → DEPTH_ATTACHMENT ─────────────────────
-    imageBarrier(cmd, m_shadowImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 0,
-                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                 VK_IMAGE_ASPECT_DEPTH_BIT, kNumCascades);
+    const uint32_t shadowLayers = (m_numCascades > 0u) ? m_numCascades : 1u;
+    const uint32_t shadowRes = (m_shadowRes > 0u) ? m_shadowRes : 1u;
+    imageBarrier(cmd, m_shadowImage, VK_IMAGE_LAYOUT_UNDEFINED,
+                 m_numCascades > 0u ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                    : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 0, m_numCascades > 0u ? VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : VK_ACCESS_SHADER_READ_BIT,
+                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                 m_numCascades > 0u
+                     ? (VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT)
+                     : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                 VK_IMAGE_ASPECT_DEPTH_BIT, shadowLayers);
 
-    // ── Shadow passes — one per cascade ──────────────────────────────────
-    for (uint32_t c = 0; c < kNumCascades; ++c) {
+    // ── Shadow passes — one per active cascade ────────────────────────────
+    for (uint32_t c = 0; c < m_numCascades; ++c) {
         VkRenderingAttachmentInfo depthAtt{};
         depthAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         depthAtt.imageView = m_shadowLayerViews[c];
@@ -3136,16 +3253,16 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 
         VkRenderingInfo renderInfo{};
         renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-        renderInfo.renderArea = {{0, 0}, {kShadowRes, kShadowRes}};
+        renderInfo.renderArea = {{0, 0}, {shadowRes, shadowRes}};
         renderInfo.layerCount = 1;
         renderInfo.pDepthAttachment = &depthAtt;
 
         vkCmdBeginRendering(cmd, &renderInfo);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipeline);
 
-        VkViewport vp{0.0f, 0.0f, float(kShadowRes), float(kShadowRes), 0.0f, 1.0f};
+        VkViewport vp{0.0f, 0.0f, float(shadowRes), float(shadowRes), 0.0f, 1.0f};
         vkCmdSetViewport(cmd, 0, 1, &vp);
-        VkRect2D sc{{0, 0}, {kShadowRes, kShadowRes}};
+        VkRect2D sc{{0, 0}, {shadowRes, shadowRes}};
         vkCmdSetScissor(cmd, 0, 1, &sc);
 
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowLayout, 0, 1,
@@ -3168,11 +3285,13 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         vkCmdEndRendering(cmd);
     }
 
-    // ── Shadow map → SHADER_READ_ONLY ────────────────────────────────────
-    imageBarrier(cmd, m_shadowImage, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                 VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_DEPTH_BIT, kNumCascades);
+    // ── Shadow map → SHADER_READ_ONLY (skip when numCascades=0: already transitioned above) ─
+    if (m_numCascades > 0u) {
+        imageBarrier(cmd, m_shadowImage, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                     VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_IMAGE_ASPECT_DEPTH_BIT, shadowLayers);
+    }
 
     // ── HDR → COLOR_ATTACHMENT_OPTIMAL ───────────────────────────────────
     imageBarrier(cmd, m_hdrImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
@@ -3448,7 +3567,7 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         TonemapPush pc{};
         pc.texelSizeX = 1.0f / static_cast<float>(m_swapchainExtent.width);
         pc.texelSizeY = 1.0f / static_cast<float>(m_swapchainExtent.height);
-        pc.enableFxaa = m_settings.antiAliasing ? 1u : 0u;
+        pc.enableFxaa = (m_settings.aaMode == RendererAAMode::FXAA) ? 1u : 0u;
         pc.bloomStrength = m_settings.bloom ? 0.04f : 0.0f;
         vkCmdPushConstants(cmd, m_tonemapLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 

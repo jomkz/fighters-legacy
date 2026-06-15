@@ -81,6 +81,100 @@ TEST_CASE("SettingsScreen: Right arrow cycles vsync Off to On") {
     CHECK(gs.vsync == VsyncMode::Adaptive);
 }
 
+TEST_CASE("SettingsScreen: AA mode cycles on Right") {
+    Fixture f;
+    SettingsScreen s(f.cfg, f.renderer, f.window, f.display);
+    // Navigate to AA mode row (row 3: 0=Res,1=Display,2=Vsync,3=AAMode)
+    for (int i = 0; i < 3; ++i) {
+        MockInput inp;
+        inp.justPressed.insert(Key::ArrowDown);
+        s.update(inp, f.window);
+    }
+    // Default aaMode is FXAA; one Right cycles to MSAA2x
+    {
+        MockInput inp;
+        inp.justPressed.insert(Key::ArrowRight);
+        s.update(inp, f.window);
+    }
+    {
+        MockInput inp;
+        inp.justPressed.insert(Key::Escape);
+        s.update(inp, f.window);
+    }
+    CHECK(f.cfg.graphics().aaMode == AntiAliasingMode::MSAA2x);
+    CHECK(f.renderer.lastApplied.aaMode == RendererAAMode::MSAA2x);
+}
+
+TEST_CASE("SettingsScreen: AA mode wraps after 5 cycles") {
+    Fixture f;
+    SettingsScreen s(f.cfg, f.renderer, f.window, f.display);
+    for (int i = 0; i < 3; ++i) {
+        MockInput inp;
+        inp.justPressed.insert(Key::ArrowDown);
+        s.update(inp, f.window);
+    }
+    // Default is FXAA (ordinal 1); 5 Rights wraps back to FXAA
+    for (int i = 0; i < 5; ++i) {
+        MockInput inp;
+        inp.justPressed.insert(Key::ArrowRight);
+        s.update(inp, f.window);
+    }
+    {
+        MockInput inp;
+        inp.justPressed.insert(Key::Escape);
+        s.update(inp, f.window);
+    }
+    CHECK(f.cfg.graphics().aaMode == AntiAliasingMode::FXAA);
+}
+
+TEST_CASE("SettingsScreen: shadow quality cycles on Right") {
+    Fixture f;
+    SettingsScreen s(f.cfg, f.renderer, f.window, f.display);
+    // Navigate to shadow quality row (row 4)
+    for (int i = 0; i < 4; ++i) {
+        MockInput inp;
+        inp.justPressed.insert(Key::ArrowDown);
+        s.update(inp, f.window);
+    }
+    // Default is High (ordinal 3); one Right cycles to Ultra
+    {
+        MockInput inp;
+        inp.justPressed.insert(Key::ArrowRight);
+        s.update(inp, f.window);
+    }
+    {
+        MockInput inp;
+        inp.justPressed.insert(Key::Escape);
+        s.update(inp, f.window);
+    }
+    CHECK(f.cfg.graphics().shadowQuality == ShadowQuality::Ultra);
+    CHECK(f.renderer.lastApplied.shadowQuality == RendererShadowQuality::Ultra);
+}
+
+TEST_CASE("SettingsScreen: particle density cycles on Right") {
+    Fixture f;
+    SettingsScreen s(f.cfg, f.renderer, f.window, f.display);
+    // Navigate to particle density row (row 5)
+    for (int i = 0; i < 5; ++i) {
+        MockInput inp;
+        inp.justPressed.insert(Key::ArrowDown);
+        s.update(inp, f.window);
+    }
+    // Default is High (ordinal 2); one Right cycles to Ultra
+    {
+        MockInput inp;
+        inp.justPressed.insert(Key::ArrowRight);
+        s.update(inp, f.window);
+    }
+    {
+        MockInput inp;
+        inp.justPressed.insert(Key::Escape);
+        s.update(inp, f.window);
+    }
+    CHECK(f.cfg.graphics().particleDensity == ParticleDensity::Ultra);
+    CHECK(f.renderer.lastApplied.particleDensity == RendererParticleDensity::Ultra);
+}
+
 TEST_CASE("SettingsScreen: master volume clamps at 0 when decremented from 0") {
     Fixture f;
     // Set initial volume to 0
@@ -89,8 +183,9 @@ TEST_CASE("SettingsScreen: master volume clamps at 0 when decremented from 0") {
     f.cfg.setAudio(as);
 
     SettingsScreen s(f.cfg, f.renderer, f.window, f.display);
-    // Navigate to master volume row (row 5: 0=Res,1=Display,2=Vsync,3=AA,4=DrawDist,5=MasterVol)
-    for (int i = 0; i < 5; ++i) {
+    // Navigate to master volume row (row 7:
+    // 0=Res,1=Display,2=Vsync,3=AAMode,4=Shadow,5=Particles,6=DrawDist,7=MasterVol)
+    for (int i = 0; i < 7; ++i) {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowDown);
         s.update(inp, f.window);
@@ -117,7 +212,8 @@ TEST_CASE("SettingsScreen: master volume clamps at 1 when incremented from 1") {
     f.cfg.setAudio(as);
 
     SettingsScreen s(f.cfg, f.renderer, f.window, f.display);
-    for (int i = 0; i < 5; ++i) {
+    // Navigate to master volume row (row 7)
+    for (int i = 0; i < 7; ++i) {
         MockInput inp;
         inp.justPressed.insert(Key::ArrowDown);
         s.update(inp, f.window);

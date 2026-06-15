@@ -106,20 +106,23 @@ static RendererSettings buildRendererSettings(const GraphicsSettings& g) {
         s.vsync = RendererVsyncMode::On;
         break;
     }
-    s.antiAliasing = g.antiAliasing;
+    // Ordinals must stay in sync with the enum definitions in both headers.
+    s.aaMode = static_cast<RendererAAMode>(g.aaMode);
+    s.shadowQuality = static_cast<RendererShadowQuality>(g.shadowQuality);
+    s.particleDensity = static_cast<RendererParticleDensity>(g.particleDensity);
     s.bloom = (g.qualityPreset >= QualityLevel::Medium);
     switch (g.drawDistance) {
     case DrawDistance::Low:
-        s.drawDistanceKm = 15.0f;
+        s.drawDistanceKm = 20.0f;
         break;
     case DrawDistance::Medium:
-        s.drawDistanceKm = 30.0f;
+        s.drawDistanceKm = 50.0f;
         break;
     case DrawDistance::Ultra:
-        s.drawDistanceKm = 100.0f;
+        s.drawDistanceKm = 200.0f;
         break;
     default:
-        s.drawDistanceKm = 50.0f;
+        s.drawDistanceKm = 100.0f;
         break; // High
     }
     return s;
