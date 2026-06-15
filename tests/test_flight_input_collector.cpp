@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "IClock.h"
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -25,8 +26,8 @@ TEST_CASE("FlightInputCollector first poll always returns value", "[flight_input
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
@@ -40,8 +41,8 @@ TEST_CASE("FlightInputCollector second poll at same clock time returns nullopt",
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     fic.poll(bridge, cam, console, inp, nullptr, {});
     auto r2 = fic.poll(bridge, cam, console, inp, nullptr, {});
@@ -57,8 +58,8 @@ TEST_CASE("FlightInputCollector wasWeaponFired resets on rate-limited poll", "[f
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     fic.poll(bridge, cam, console, inp, nullptr, {});
     CHECK(fic.wasWeaponFired());
@@ -76,11 +77,11 @@ TEST_CASE("FlightInputCollector advancing clock past gate returns value", "[flig
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     fic.poll(bridge, cam, console, inp, nullptr, {});
-    t += std::chrono::milliseconds(17);
+    t.advance(std::chrono::milliseconds(17));
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
 }
@@ -93,19 +94,19 @@ TEST_CASE("FlightInputCollector seqNum increments across polls", "[flight_input]
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r0 = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r0.has_value());
     CHECK(r0->seqNum == 0u);
 
-    t += std::chrono::milliseconds(17);
+    t.advance(std::chrono::milliseconds(17));
     auto r1 = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r1.has_value());
     CHECK(r1->seqNum == 1u);
 
-    t += std::chrono::milliseconds(17);
+    t.advance(std::chrono::milliseconds(17));
     auto r2 = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r2.has_value());
     CHECK(r2->seqNum == 2u);
@@ -123,8 +124,8 @@ TEST_CASE("FlightInputCollector tickIndex is 0 when bridge has no snapshot", "[f
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
@@ -144,8 +145,8 @@ TEST_CASE("FlightInputCollector tickIndex taken from bridge snapshot", "[flight_
     bridge.tryAdvance();
 
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
@@ -165,8 +166,8 @@ TEST_CASE("FlightInputCollector Space sets fire bit and wasWeaponFired", "[fligh
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
@@ -183,8 +184,8 @@ TEST_CASE("FlightInputCollector Tab sets afterburner bit", "[flight_input]") {
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
@@ -201,8 +202,8 @@ TEST_CASE("FlightInputCollector ArrowUp gives negative elevator", "[flight_input
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
@@ -218,8 +219,8 @@ TEST_CASE("FlightInputCollector ArrowDown gives positive elevator", "[flight_inp
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
@@ -235,8 +236,8 @@ TEST_CASE("FlightInputCollector ArrowLeft gives negative aileron", "[flight_inpu
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
@@ -252,8 +253,8 @@ TEST_CASE("FlightInputCollector ArrowRight gives positive aileron", "[flight_inp
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
@@ -269,8 +270,8 @@ TEST_CASE("FlightInputCollector Key Z gives negative rudder", "[flight_input]") 
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
@@ -286,8 +287,8 @@ TEST_CASE("FlightInputCollector Key X gives positive rudder", "[flight_input]") 
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
@@ -303,8 +304,8 @@ TEST_CASE("FlightInputCollector LeftShift sets throttle to 1", "[flight_input]")
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
@@ -320,8 +321,8 @@ TEST_CASE("FlightInputCollector PageUp increases throttle via camInput", "[fligh
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     const float before = cam.throttle();
     fic.poll(bridge, cam, console, inp, nullptr, {});
@@ -337,8 +338,8 @@ TEST_CASE("FlightInputCollector PageDown decreases throttle via camInput", "[fli
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     // Start at half-throttle so there is room to decrease.
     cam.setThrottle(0.5f);
@@ -356,8 +357,8 @@ TEST_CASE("FlightInputCollector opposing Up+Down cancel to zero elevator", "[fli
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
@@ -374,8 +375,8 @@ TEST_CASE("FlightInputCollector opposing Left+Right cancel to zero aileron", "[f
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
@@ -392,8 +393,8 @@ TEST_CASE("FlightInputCollector opposing Z+X cancel to zero rudder", "[flight_in
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
@@ -415,8 +416,8 @@ TEST_CASE("FlightInputCollector console open suppresses keyboard input", "[fligh
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
@@ -437,8 +438,8 @@ TEST_CASE("FlightInputCollector console open suppresses gamepad input", "[flight
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
     REQUIRE(r.has_value());
@@ -455,8 +456,8 @@ TEST_CASE("FlightInputCollector console open still reads throttle from camInput"
     cam.setThrottle(0.7f);
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});
     REQUIRE(r.has_value());
@@ -478,8 +479,8 @@ TEST_CASE("FlightInputCollector gamepad fireButton sets bit 0 and wasWeaponFired
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
     REQUIRE(r.has_value());
@@ -498,8 +499,8 @@ TEST_CASE("FlightInputCollector gamepad afterburnerButton sets bit 1", "[flight_
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
     REQUIRE(r.has_value());
@@ -518,8 +519,8 @@ TEST_CASE("FlightInputCollector gamepad TriggerLeft above deadzone sets throttle
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
     REQUIRE(r.has_value());
@@ -538,8 +539,8 @@ TEST_CASE("FlightInputCollector gamepad TriggerLeft at deadzone does not overrid
     cam.setThrottle(0.3f);
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
     REQUIRE(r.has_value());
@@ -558,8 +559,8 @@ TEST_CASE("FlightInputCollector gamepad RightY above deadzone overrides elevator
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
     REQUIRE(r.has_value());
@@ -577,8 +578,8 @@ TEST_CASE("FlightInputCollector gamepad RightX above deadzone overrides aileron"
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
     REQUIRE(r.has_value());
@@ -596,8 +597,8 @@ TEST_CASE("FlightInputCollector gamepad LeftX above deadzone overrides rudder", 
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
     REQUIRE(r.has_value());
@@ -617,8 +618,8 @@ TEST_CASE("FlightInputCollector gamepad axis below deadzone leaves keyboard valu
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
     REQUIRE(r.has_value());
@@ -638,14 +639,14 @@ TEST_CASE("FlightInputCollector gamepad invertPitch flips elevator sign", "[flig
     fl::SimRenderBridge bridge;
 
     FlightInputCollector fic_normal;
-    auto t = std::chrono::steady_clock::now();
-    fic_normal.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic_normal.setClock(t);
     ControlsSettings cs_normal;
     auto r_normal = fic_normal.poll(bridge, cam, console, inp, nullptr, cs_normal);
     REQUIRE(r_normal.has_value());
 
     FlightInputCollector fic_inv;
-    fic_inv.setClockOverride([&t] { return t; });
+    fic_inv.setClock(t);
     auto r_inv = fic_inv.poll(bridge, cam, console, inp, nullptr, cs);
     REQUIRE(r_inv.has_value());
 
@@ -668,8 +669,8 @@ TEST_CASE("FlightInputCollector keyboard Space and gamepad afterburner set both 
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
     REQUIRE(r.has_value());
@@ -688,8 +689,8 @@ TEST_CASE("FlightInputCollector keyboard Tab and gamepad fireButton set both bit
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, nullptr, cs);
     REQUIRE(r.has_value());
@@ -714,8 +715,8 @@ TEST_CASE("FlightInputCollector HOTAS throttle axis sets absolute throttle", "[f
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, &joy, cs);
     REQUIRE(r.has_value());
@@ -736,8 +737,8 @@ TEST_CASE("FlightInputCollector HOTAS elevator axis overrides keyboard", "[fligh
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, &joy, cs);
     REQUIRE(r.has_value());
@@ -760,8 +761,8 @@ TEST_CASE("FlightInputCollector HOTAS aileron axis overrides keyboard", "[flight
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, &joy, cs);
     REQUIRE(r.has_value());
@@ -783,8 +784,8 @@ TEST_CASE("FlightInputCollector HOTAS rudder axis overrides keyboard", "[flight_
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, &joy, cs);
     REQUIRE(r.has_value());
@@ -807,8 +808,8 @@ TEST_CASE("FlightInputCollector HOTAS axis at deadzone does not override keyboar
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     auto r = fic.poll(bridge, cam, console, inp, &joy, cs);
     REQUIRE(r.has_value());
@@ -830,15 +831,15 @@ TEST_CASE("FlightInputCollector HOTAS hotasInvertPitch flips elevator sign", "[f
     fl::SimRenderBridge bridge;
 
     FlightInputCollector fic_n;
-    auto t = std::chrono::steady_clock::now();
-    fic_n.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic_n.setClock(t);
     auto r_n = fic_n.poll(bridge, cam, console, inp, &joy, cs_normal);
     REQUIRE(r_n.has_value());
 
     ControlsSettings cs_inv = cs_normal;
     cs_inv.hotasInvertPitch = true;
     FlightInputCollector fic_i;
-    fic_i.setClockOverride([&t] { return t; });
+    fic_i.setClock(t);
     auto r_i = fic_i.poll(bridge, cam, console, inp, &joy, cs_inv);
     REQUIRE(r_i.has_value());
 
@@ -854,8 +855,8 @@ TEST_CASE("FlightInputCollector nullptr joystick skips HOTAS path", "[flight_inp
     CameraInput cam;
     fl::SimRenderBridge bridge;
     FlightInputCollector fic;
-    auto t = std::chrono::steady_clock::now();
-    fic.setClockOverride([&t] { return t; });
+    fl::ManualClock t;
+    fic.setClock(t);
 
     // joystick=nullptr must not crash and keyboard must win.
     auto r = fic.poll(bridge, cam, console, inp, nullptr, {});

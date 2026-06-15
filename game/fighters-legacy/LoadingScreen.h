@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "IClock.h"
 #include "IScreen.h"
 #include "RenderTypes.h"
 #include "SessionStatus.h"
@@ -34,7 +35,7 @@ class LoadingScreen : public IScreen {
     // Reset to initial state for a new session.
     void reset();
 
-    void setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn);
+    void setClock(const fl::IClock& clock);
 
   private:
     enum class Phase { StartingServer, Connecting, Ready, Failed };
@@ -53,7 +54,7 @@ class LoadingScreen : public IScreen {
     static constexpr float kFailDisplaySeconds = 3.f;
     static constexpr float kConnectTimeoutSeconds = 10.f;
     static constexpr float kStartTimeoutSeconds = 10.f;
-    std::function<std::chrono::steady_clock::time_point()> m_now{std::chrono::steady_clock::now};
+    const fl::IClock* m_clock{&fl::SystemClock::instance()};
 
     static constexpr int kMaxLines = 6;
     static constexpr int kMaxElements = kMaxLines + 1; // + background rect

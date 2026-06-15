@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "IClock.h"
 #include <catch2/catch_test_macros.hpp>
 
 #include "ClientNetEventHandler.h"
@@ -155,9 +156,9 @@ TEST_CASE("ClientNetEventHandler: MsgMotd notice auto-dismisses after 15 seconds
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    auto fakeTime = std::chrono::steady_clock::now();
+    fl::ManualClock fakeTime;
     ServerNotice notice;
-    notice.setClockOverride([&fakeTime]() { return fakeTime; });
+    notice.setClock(fakeTime);
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
     handler.notice = &notice;
@@ -167,7 +168,7 @@ TEST_CASE("ClientNetEventHandler: MsgMotd notice auto-dismisses after 15 seconds
 
     REQUIRE(!notice.buildElements().empty());
 
-    fakeTime += std::chrono::seconds(16);
+    fakeTime.advance(std::chrono::seconds(16));
     CHECK(notice.buildElements().empty());
 }
 
@@ -255,9 +256,9 @@ TEST_CASE("ClientNetEventHandler: MsgMotd honours custom motdDisplaySeconds", "[
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    auto fakeTime = std::chrono::steady_clock::now();
+    fl::ManualClock fakeTime;
     ServerNotice notice;
-    notice.setClockOverride([&fakeTime]() { return fakeTime; });
+    notice.setClock(fakeTime);
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
     handler.notice = &notice;
@@ -268,10 +269,10 @@ TEST_CASE("ClientNetEventHandler: MsgMotd honours custom motdDisplaySeconds", "[
 
     REQUIRE(!notice.buildElements().empty());
 
-    fakeTime += std::chrono::seconds(4);
+    fakeTime.advance(std::chrono::seconds(4));
     CHECK(!notice.buildElements().empty()); // still within window
 
-    fakeTime += std::chrono::seconds(2);
+    fakeTime.advance(std::chrono::seconds(2));
     CHECK(notice.buildElements().empty()); // expired at 6 s
 }
 
@@ -281,9 +282,9 @@ TEST_CASE("ClientNetEventHandler: MsgMotd motdDisplaySeconds 0 is persistent", "
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    auto fakeTime = std::chrono::steady_clock::now();
+    fl::ManualClock fakeTime;
     ServerNotice notice;
-    notice.setClockOverride([&fakeTime]() { return fakeTime; });
+    notice.setClock(fakeTime);
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
     handler.notice = &notice;
@@ -294,7 +295,7 @@ TEST_CASE("ClientNetEventHandler: MsgMotd motdDisplaySeconds 0 is persistent", "
 
     REQUIRE(!notice.buildElements().empty());
 
-    fakeTime += std::chrono::seconds(3600);
+    fakeTime.advance(std::chrono::seconds(3600));
     CHECK(!notice.buildElements().empty()); // still shown — no expiry set
 }
 
@@ -305,9 +306,9 @@ TEST_CASE("ClientNetEventHandler: MsgMotd server displaySeconds overrides client
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    auto fakeTime = std::chrono::steady_clock::now();
+    fl::ManualClock fakeTime;
     ServerNotice notice;
-    notice.setClockOverride([&fakeTime]() { return fakeTime; });
+    notice.setClock(fakeTime);
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
     handler.notice = &notice;
@@ -318,10 +319,10 @@ TEST_CASE("ClientNetEventHandler: MsgMotd server displaySeconds overrides client
 
     REQUIRE(!notice.buildElements().empty());
 
-    fakeTime += std::chrono::seconds(29);
+    fakeTime.advance(std::chrono::seconds(29));
     CHECK(!notice.buildElements().empty()); // still within server window
 
-    fakeTime += std::chrono::seconds(2);
+    fakeTime.advance(std::chrono::seconds(2));
     CHECK(notice.buildElements().empty()); // expired at 31 s (past 30 s server window)
 }
 
@@ -563,9 +564,9 @@ TEST_CASE("ClientNetEventHandler: MsgMotd server displaySeconds 0 falls back to 
     MockLogger logger;
     MockNetwork net;
     EnvironmentState env{};
-    auto fakeTime = std::chrono::steady_clock::now();
+    fl::ManualClock fakeTime;
     ServerNotice notice;
-    notice.setClockOverride([&fakeTime]() { return fakeTime; });
+    notice.setClock(fakeTime);
 
     ClientNetEventHandler handler(bridge, registry, logger, net, env);
     handler.notice = &notice;
@@ -576,9 +577,9 @@ TEST_CASE("ClientNetEventHandler: MsgMotd server displaySeconds 0 falls back to 
 
     REQUIRE(!notice.buildElements().empty());
 
-    fakeTime += std::chrono::seconds(4);
+    fakeTime.advance(std::chrono::seconds(4));
     CHECK(!notice.buildElements().empty()); // within client window
 
-    fakeTime += std::chrono::seconds(2);
+    fakeTime.advance(std::chrono::seconds(2));
     CHECK(notice.buildElements().empty()); // expired at 6 s (past 5 s client window)
 }

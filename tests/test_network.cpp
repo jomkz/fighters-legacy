@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ENetNetwork.h"
+#include "IClock.h"
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstring>
@@ -540,8 +541,7 @@ TEST_CASE("getPeerAddress plain format preserved for IPv4 peer", "[network][inte
 // ---------------------------------------------------------------------------
 
 TEST_CASE("pre-handshake rate limit blocks excess connect attempts", "[network][integration]") {
-    using Clock = std::chrono::steady_clock;
-    Clock::time_point fakeNow = Clock::now();
+    fl::ManualClock fakeNow;
 
     ENetNetwork server, c1, c2, c3;
     EventSink srvSink, s1, s2, s3;
@@ -556,7 +556,7 @@ TEST_CASE("pre-handshake rate limit blocks excess connect attempts", "[network][
 
     REQUIRE(server.bind(nullptr, 19030, 8));
     server.setPreHandshakeRateLimit(2, 2000);
-    server.setPreHandshakeClockOverride([&] { return fakeNow; });
+    server.setPreHandshakeClock(fakeNow);
 
     // Flush all three SYNs onto the wire before the server processes any of them.
     REQUIRE(c1.connect("127.0.0.1", 19030));
@@ -582,8 +582,7 @@ TEST_CASE("pre-handshake rate limit blocks excess connect attempts", "[network][
 }
 
 TEST_CASE("pre-handshake rate limit window expiry allows reconnection", "[network][integration]") {
-    using Clock = std::chrono::steady_clock;
-    Clock::time_point fakeNow = Clock::now();
+    fl::ManualClock fakeNow;
 
     ENetNetwork server, c1, c2, c3;
     EventSink srvSink, s1, s2, s3;
@@ -598,7 +597,7 @@ TEST_CASE("pre-handshake rate limit window expiry allows reconnection", "[networ
 
     REQUIRE(server.bind(nullptr, 19031, 8));
     server.setPreHandshakeRateLimit(1, 1000);
-    server.setPreHandshakeClockOverride([&] { return fakeNow; });
+    server.setPreHandshakeClock(fakeNow);
 
     // c1 SYN -> count=1 -> allowed; c2 SYN -> count=1 >= limit=1 -> dropped.
     REQUIRE(c1.connect("127.0.0.1", 19031));
@@ -612,7 +611,7 @@ TEST_CASE("pre-handshake rate limit window expiry allows reconnection", "[networ
     CHECK(server.getPeerCount() == 1);
 
     // Advance the injected clock past the 1000 ms window.
-    fakeNow += std::chrono::milliseconds(1500);
+    fakeNow.advance(std::chrono::milliseconds(1500));
 
     // Use a fresh client (c3) rather than waiting for c2's ENet retry timer
     // (ENet's initial retry backoff is ~1000 ms; pumpN completes in microseconds
@@ -662,8 +661,7 @@ TEST_CASE("pre-handshake rate limit 0 disables pre-handshake filter", "[network]
 }
 
 TEST_CASE("pre-handshake rate limit passes through established peer traffic", "[network][integration]") {
-    using Clock = std::chrono::steady_clock;
-    Clock::time_point fakeNow = Clock::now();
+    fl::ManualClock fakeNow;
 
     ENetNetwork server, c1, c2;
     EventSink srvSink, s1, s2;
@@ -676,7 +674,7 @@ TEST_CASE("pre-handshake rate limit passes through established peer traffic", "[
 
     REQUIRE(server.bind(nullptr, 19033, 8));
     server.setPreHandshakeRateLimit(1, 60000); // limit=1, very long window
-    server.setPreHandshakeClockOverride([&] { return fakeNow; });
+    server.setPreHandshakeClock(fakeNow);
 
     // c1 connects (count=1 = limit reached for 127.0.0.1).
     REQUIRE(c1.connect("127.0.0.1", 19033));

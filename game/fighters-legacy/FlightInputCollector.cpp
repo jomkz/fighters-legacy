@@ -17,7 +17,7 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
                                                              IJoystick* joystick, const ControlsSettings& cs) {
     m_weaponFired = false;
 
-    const auto now = m_clock();
+    const auto now = m_clock->now();
     if (std::chrono::duration<float>(now - m_lastInputTime).count() < 1.0f / 60.0f)
         return std::nullopt;
     m_lastInputTime = now;
@@ -116,6 +116,6 @@ std::optional<fl::MsgClientInput> FlightInputCollector::poll(const fl::SimRender
     return inp;
 }
 
-void FlightInputCollector::setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn) {
-    m_clock = std::move(fn);
+void FlightInputCollector::setClock(const fl::IClock& clock) {
+    m_clock = &clock;
 }

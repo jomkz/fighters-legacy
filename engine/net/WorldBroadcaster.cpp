@@ -157,9 +157,9 @@ void WorldBroadcaster::setMaxConnectionsPerIp(int max) noexcept {
     m_maxConnectionsPerIp = max;
 }
 
-void WorldBroadcaster::setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn) {
-    m_now = fn;
-    m_adminAuthTracker.setClockOverride(std::move(fn));
+void WorldBroadcaster::setClock(const IClock& clock) {
+    m_clock = &clock;
+    m_adminAuthTracker.setClock(clock);
 }
 
 void WorldBroadcaster::setMotd(std::string motd) {
@@ -180,7 +180,7 @@ void WorldBroadcaster::setAdminDispatch(std::function<std::string(std::string_vi
 
 void WorldBroadcaster::setAdminAuthParams(int maxFailures, int lockoutSeconds) {
     m_adminAuthTracker = AuthTracker(maxFailures, lockoutSeconds);
-    m_adminAuthTracker.setClockOverride(m_now);
+    m_adminAuthTracker.setClock(*m_clock);
 }
 
 void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
@@ -204,7 +204,7 @@ void WorldBroadcaster::forEachPeer(
 void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // Coarse prune of stale rate-limit records every 600 ticks (~10 s at 60 Hz).
     if (++m_ratePruneTick % 600 == 0) {
-        auto cutoff = m_now() - std::chrono::seconds(m_connectRateWindowS);
+        auto cutoff = m_clock->now() - std::chrono::seconds(m_connectRateWindowS);
         for (auto it = m_connectRecords.begin(); it != m_connectRecords.end();) {
             auto& ts = it->second.timestamps;
             while (!ts.empty() && ts.front() < cutoff)
@@ -347,7 +347,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // Shutdown countdown: fire at each interval and at T=0.
     if (m_shuttingDown) {
         using namespace std::chrono;
-        auto now = m_now();
+        auto now = m_clock->now();
         if (now >= m_shutdownAt) {
             broadcastShutdownNotice(0, makeShutdownMessage(0, m_shutdownReason).c_str());
             m_shuttingDown = false;
@@ -386,7 +386,7 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
 
     // Connection rate limit — sliding window per IP.
     if (!ip.empty()) {
-        auto now = m_now();
+        auto now = m_clock->now();
         auto& rec = m_connectRecords[ip];
         auto cutoff = now - std::chrono::seconds(m_connectRateWindowS);
         while (!rec.timestamps.empty() && rec.timestamps.front() < cutoff)
@@ -498,7 +498,7 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
         // Packet flood detection: disconnect peers that send faster than multiplier * tick rate.
         {
             auto& flood = m_peerFloodState[peerId];
-            auto now = m_now();
+            auto now = m_clock->now();
             if (now - flood.windowStart >= std::chrono::seconds(1)) {
                 flood.windowStart = now;
                 flood.packetCount = 0;
@@ -702,9 +702,9 @@ void WorldBroadcaster::setShutdownCallback(std::function<void()> fn) {
 void WorldBroadcaster::initiateShutdown(uint32_t secondsDelay, uint32_t warningIntervalS, std::string reason) {
     using namespace std::chrono;
     m_shuttingDown = true;
-    m_shutdownAt = m_now() + seconds(secondsDelay);
+    m_shutdownAt = m_clock->now() + seconds(secondsDelay);
     m_warningIntervalS = warningIntervalS;
-    m_nextNoticeAt = m_now(); // fire on the very next tick
+    m_nextNoticeAt = m_clock->now(); // fire on the very next tick
     m_shutdownReason = std::move(reason);
 }
 
@@ -717,7 +717,7 @@ bool WorldBroadcaster::extendShutdown(uint32_t additionalSeconds) {
     if (!m_shuttingDown)
         return false;
     m_shutdownAt += std::chrono::seconds(additionalSeconds);
-    m_nextNoticeAt = m_now(); // immediate update notice on next tick
+    m_nextNoticeAt = m_clock->now(); // immediate update notice on next tick
     return true;
 }
 
@@ -725,7 +725,7 @@ uint32_t WorldBroadcaster::secondsUntilShutdown() const noexcept {
     if (!m_shuttingDown)
         return 0;
     using namespace std::chrono;
-    auto now = m_now();
+    auto now = m_clock->now();
     if (now >= m_shutdownAt)
         return 0;
     return static_cast<uint32_t>(duration_cast<seconds>(m_shutdownAt - now).count());

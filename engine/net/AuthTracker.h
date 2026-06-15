@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "IClock.h"
+
 #include <chrono>
-#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -24,16 +25,14 @@ class AuthTracker {
         long long expiresIn; // seconds remaining; 0 when lockedOut == false
     };
 
-    AuthTracker(int maxFailures, int lockoutSeconds)
-        : m_maxFailures(maxFailures), m_lockoutDuration(lockoutSeconds),
-          m_now([] { return std::chrono::steady_clock::now(); }) {}
+    AuthTracker(int maxFailures, int lockoutSeconds) : m_maxFailures(maxFailures), m_lockoutDuration(lockoutSeconds) {}
 
     // Record a failed auth attempt. Returns true if the IP is now locked out.
     bool recordFailure(const std::string& ip) {
         auto& count = m_failCount[ip];
         ++count;
         if (count >= m_maxFailures) {
-            m_lockouts[ip] = m_now() + m_lockoutDuration;
+            m_lockouts[ip] = m_clock->now() + m_lockoutDuration;
             m_failCount.erase(ip);
             return true;
         }
@@ -51,7 +50,7 @@ class AuthTracker {
         auto it = m_lockouts.find(ip);
         if (it == m_lockouts.end())
             return false;
-        if (m_now() >= it->second) {
+        if (m_clock->now() >= it->second) {
             m_lockouts.erase(it);
             return false;
         }
@@ -60,7 +59,7 @@ class AuthTracker {
 
     // Remove all expired lockout entries. Call periodically to bound memory growth.
     void pruneExpired() {
-        auto now = m_now();
+        auto now = m_clock->now();
         for (auto it = m_lockouts.begin(); it != m_lockouts.end();) {
             if (now >= it->second)
                 it = m_lockouts.erase(it);
@@ -76,9 +75,9 @@ class AuthTracker {
         m_failCount.erase(ip);
     }
 
-    // Inject a deterministic clock for unit tests (mirrors setClockOverride pattern).
-    void setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn) {
-        m_now = std::move(fn);
+    // Inject a deterministic clock for unit tests (default is the real SystemClock).
+    void setClock(const IClock& clock) {
+        m_clock = &clock;
     }
 
     int maxFailures() const noexcept {
@@ -87,7 +86,7 @@ class AuthTracker {
 
     // Count of non-expired lockouts. Does not prune.
     int lockedOutCount() const {
-        auto now = m_now();
+        auto now = m_clock->now();
         int count = 0;
         for (const auto& [ip, expiry] : m_lockouts)
             if (now < expiry)
@@ -98,7 +97,7 @@ class AuthTracker {
     // Snapshot of all active lockouts + IPs with pending failures.
     // Expired lockouts are excluded inline (no pruning).
     std::vector<FailureEntry> failureSummary() const {
-        auto now = m_now();
+        auto now = m_clock->now();
         std::vector<FailureEntry> result;
         for (const auto& [ip, expiry] : m_lockouts)
             if (now < expiry) {
@@ -115,7 +114,7 @@ class AuthTracker {
     std::chrono::seconds m_lockoutDuration;
     std::unordered_map<std::string, int> m_failCount;
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> m_lockouts;
-    std::function<std::chrono::steady_clock::time_point()> m_now;
+    const IClock* m_clock{&SystemClock::instance()};
 };
 
 // Snapshot of auth lockout state. Returned by WorldBroadcaster::getAuthLockoutSummary()

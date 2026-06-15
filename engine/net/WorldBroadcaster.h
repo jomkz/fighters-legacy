@@ -148,7 +148,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     void setMaxConnectionsPerIp(int max) noexcept;
 
     // Override the clock used for rate limiting and shutdown timing (for testing only).
-    void setClockOverride(std::function<std::chrono::steady_clock::time_point()> fn);
+    void setClock(const IClock& clock);
 
     // Shutdown countdown — all must be called from the sim thread (via enqueueSimCallback),
     // except setShutdownCallback which must be called before gameLoop.start().
@@ -258,7 +258,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     std::unordered_set<std::string> m_allowedAddresses; // empty = allowlist disabled
 
     // Injectable clock for testing; defaults to steady_clock::now.
-    std::function<std::chrono::steady_clock::time_point()> m_now{std::chrono::steady_clock::now};
+    const IClock* m_clock{&SystemClock::instance()};
 
     // MOTD state (set before gameLoop.start() or via enqueueSimCallback; read on sim thread only).
     std::string m_motd;               // empty = no MOTD sent
