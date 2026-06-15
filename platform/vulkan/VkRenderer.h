@@ -5,6 +5,7 @@
 #include "IRenderer.h"
 #include "VkResources.h"
 #include <array>
+#include <cstddef>
 #include <string>
 #include <vector>
 #include <vulkan/vulkan.h>
@@ -50,12 +51,16 @@ struct ForwardPushConstants {
 };
 static_assert(sizeof(ForwardPushConstants) <= 128);
 
-// GPU shadow UBO — cascade view-proj matrices + cascade split distances.
-// std140: mat4[4] = 256 bytes, vec4 = 16 bytes → total 272 bytes.
+// GPU shadow UBO — cascade view-proj matrices + cascade split distances + runtime cascade count.
+// std140: mat4[4]=256, vec4=16, uint32+pad[3]=16 → total 288 bytes.
 struct ShadowUBO {
     glm::mat4 lightViewProj[kNumCascades]; // 256 bytes
     glm::vec4 splitDepths;                 // x/y/z = VS end of cascades 0/1/2, w = shadow far
+    uint32_t numCascades;                  // active cascade count (0 = shadows disabled)
+    uint32_t _pad[3];                      // explicit pad to 16-byte struct alignment
 };
+static_assert(sizeof(ShadowUBO) == 288u);
+static_assert(offsetof(ShadowUBO, numCascades) == 272u);
 
 // Push constants for the depth-only shadow pass.
 struct ShadowPushConstants {
@@ -198,6 +203,8 @@ class VkRenderer : public IRenderer {
     // ── Shadow resources ───────────────────────────────────────────────────
     bool createShadowResources();
     void destroyShadowResources();
+    void recreateShadowResources();
+    void recreateParticleResources();
 
     // ── Pipelines ──────────────────────────────────────────────────────────
     bool createPipelineCache();
@@ -318,6 +325,14 @@ class VkRenderer : public IRenderer {
 
     // ── Settings ──────────────────────────────────────────────────────────
     RendererSettings m_settings{};
+
+    // Runtime shadow / particle parameters (derived from m_settings at init and on applySettings).
+    uint32_t m_shadowRes{kShadowRes};
+    uint32_t m_numCascades{kNumCascades};
+    uint32_t m_maxParticles{kMaxParticles};
+    uint32_t m_maxSpawnPerFrame{kMaxSpawnPerFrame};
+    bool m_shadowDirty{false};
+    bool m_particlesDirty{false};
 
     // ── Pipelines ─────────────────────────────────────────────────────────
     VkPipelineCache m_pipelineCache{VK_NULL_HANDLE};

@@ -44,7 +44,9 @@ TEST_CASE("Settings: missing [graphics]/[audio] sections load defaults with no W
     CHECK(g.frameRateCap == FrameRateCap::Off);
     CHECK(g.qualityPreset == QualityLevel::High);
     CHECK(g.drawDistance == DrawDistance::High);
-    CHECK(g.antiAliasing == true);
+    CHECK(g.aaMode == AntiAliasingMode::FXAA);
+    CHECK(g.shadowQuality == ShadowQuality::High);
+    CHECK(g.particleDensity == ParticleDensity::High);
     CHECK(g.uiScale == UiScale::Scale100);
     CHECK(g.cockpitFov == 90);
 
@@ -239,25 +241,159 @@ TEST_CASE("Settings: unknown draw_distance falls back to High and emits Warn", "
 }
 
 // ---------------------------------------------------------------------------
-// AntiAliasing boolean round-trips
+// AntiAliasingMode round-trips
 // ---------------------------------------------------------------------------
 
-TEST_CASE("Settings: antiAliasing false round-trip", "[settings]") {
+TEST_CASE("Settings: aaMode Off round-trip", "[settings]") {
     MockFilesystem fs;
     MockLogger logger;
     GraphicsSettings gs;
-    gs.antiAliasing = false;
+    gs.aaMode = AntiAliasingMode::Off;
     makeAndSave(fs, logger, gs, {});
-    CHECK(reload(fs).graphics().antiAliasing == false);
+    CHECK(reload(fs).graphics().aaMode == AntiAliasingMode::Off);
 }
 
-TEST_CASE("Settings: antiAliasing true round-trip", "[settings]") {
+TEST_CASE("Settings: aaMode FXAA round-trip", "[settings]") {
     MockFilesystem fs;
     MockLogger logger;
     GraphicsSettings gs;
-    gs.antiAliasing = true;
+    gs.aaMode = AntiAliasingMode::FXAA;
     makeAndSave(fs, logger, gs, {});
-    CHECK(reload(fs).graphics().antiAliasing == true);
+    CHECK(reload(fs).graphics().aaMode == AntiAliasingMode::FXAA);
+}
+
+TEST_CASE("Settings: aaMode MSAA2x round-trip", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    GraphicsSettings gs;
+    gs.aaMode = AntiAliasingMode::MSAA2x;
+    makeAndSave(fs, logger, gs, {});
+    CHECK(reload(fs).graphics().aaMode == AntiAliasingMode::MSAA2x);
+}
+
+TEST_CASE("Settings: aaMode MSAA4x round-trip", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    GraphicsSettings gs;
+    gs.aaMode = AntiAliasingMode::MSAA4x;
+    makeAndSave(fs, logger, gs, {});
+    CHECK(reload(fs).graphics().aaMode == AntiAliasingMode::MSAA4x);
+}
+
+TEST_CASE("Settings: aaMode MSAA8x round-trip", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    GraphicsSettings gs;
+    gs.aaMode = AntiAliasingMode::MSAA8x;
+    makeAndSave(fs, logger, gs, {});
+    CHECK(reload(fs).graphics().aaMode == AntiAliasingMode::MSAA8x);
+}
+
+TEST_CASE("Settings: anti_aliasing bool migration true -> FXAA", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[graphics]\nanti_aliasing = true\n");
+    UserConfig cfg(fs, logger);
+    cfg.load();
+    CHECK(cfg.graphics().aaMode == AntiAliasingMode::FXAA);
+}
+
+TEST_CASE("Settings: anti_aliasing bool migration false -> Off", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    fs.addFile("config/user.toml", "[graphics]\nanti_aliasing = false\n");
+    UserConfig cfg(fs, logger);
+    cfg.load();
+    CHECK(cfg.graphics().aaMode == AntiAliasingMode::Off);
+}
+
+// ---------------------------------------------------------------------------
+// ShadowQuality round-trips
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Settings: shadowQuality Off round-trip", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    GraphicsSettings gs;
+    gs.shadowQuality = ShadowQuality::Off;
+    makeAndSave(fs, logger, gs, {});
+    CHECK(reload(fs).graphics().shadowQuality == ShadowQuality::Off);
+}
+
+TEST_CASE("Settings: shadowQuality Low round-trip", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    GraphicsSettings gs;
+    gs.shadowQuality = ShadowQuality::Low;
+    makeAndSave(fs, logger, gs, {});
+    CHECK(reload(fs).graphics().shadowQuality == ShadowQuality::Low);
+}
+
+TEST_CASE("Settings: shadowQuality Medium round-trip", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    GraphicsSettings gs;
+    gs.shadowQuality = ShadowQuality::Medium;
+    makeAndSave(fs, logger, gs, {});
+    CHECK(reload(fs).graphics().shadowQuality == ShadowQuality::Medium);
+}
+
+TEST_CASE("Settings: shadowQuality High round-trip", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    GraphicsSettings gs;
+    gs.shadowQuality = ShadowQuality::High;
+    makeAndSave(fs, logger, gs, {});
+    CHECK(reload(fs).graphics().shadowQuality == ShadowQuality::High);
+}
+
+TEST_CASE("Settings: shadowQuality Ultra round-trip", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    GraphicsSettings gs;
+    gs.shadowQuality = ShadowQuality::Ultra;
+    makeAndSave(fs, logger, gs, {});
+    CHECK(reload(fs).graphics().shadowQuality == ShadowQuality::Ultra);
+}
+
+// ---------------------------------------------------------------------------
+// ParticleDensity round-trips
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Settings: particleDensity Low round-trip", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    GraphicsSettings gs;
+    gs.particleDensity = ParticleDensity::Low;
+    makeAndSave(fs, logger, gs, {});
+    CHECK(reload(fs).graphics().particleDensity == ParticleDensity::Low);
+}
+
+TEST_CASE("Settings: particleDensity Medium round-trip", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    GraphicsSettings gs;
+    gs.particleDensity = ParticleDensity::Medium;
+    makeAndSave(fs, logger, gs, {});
+    CHECK(reload(fs).graphics().particleDensity == ParticleDensity::Medium);
+}
+
+TEST_CASE("Settings: particleDensity High round-trip", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    GraphicsSettings gs;
+    gs.particleDensity = ParticleDensity::High;
+    makeAndSave(fs, logger, gs, {});
+    CHECK(reload(fs).graphics().particleDensity == ParticleDensity::High);
+}
+
+TEST_CASE("Settings: particleDensity Ultra round-trip", "[settings]") {
+    MockFilesystem fs;
+    MockLogger logger;
+    GraphicsSettings gs;
+    gs.particleDensity = ParticleDensity::Ultra;
+    makeAndSave(fs, logger, gs, {});
+    CHECK(reload(fs).graphics().particleDensity == ParticleDensity::Ultra);
 }
 
 // ---------------------------------------------------------------------------

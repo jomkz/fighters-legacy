@@ -548,7 +548,7 @@ TEST_CASE("MockRenderer applySettings accepts any RendererSettings") {
     MockRenderer renderer;
     RendererSettings rs{};
     rs.vsync = RendererVsyncMode::Off;
-    rs.antiAliasing = false;
+    rs.aaMode = RendererAAMode::Off;
     rs.bloom = false;
     rs.drawDistanceKm = 20.0f;
     renderer.applySettings(rs);     // must not crash

@@ -19,11 +19,22 @@ enum class RendererVsyncMode : uint8_t {
     Adaptive, // prefer FIFO_RELAXED, fallback FIFO
 };
 
+// AA mode — ordinals must stay in sync with AntiAliasingMode in engine/config/GraphicsSettings.h.
+enum class RendererAAMode : uint8_t { Off, FXAA, MSAA2x, MSAA4x, MSAA8x };
+
+// Shadow quality — ordinals must stay in sync with ShadowQuality in engine/config/GraphicsSettings.h.
+enum class RendererShadowQuality : uint8_t { Off, Low, Medium, High, Ultra };
+
+// Particle density — ordinals must stay in sync with ParticleDensity in engine/config/GraphicsSettings.h.
+enum class RendererParticleDensity : uint8_t { Low, Medium, High, Ultra };
+
 struct RendererSettings {
     RendererVsyncMode vsync{RendererVsyncMode::On};
-    bool antiAliasing{true};     // FXAA on/off
+    RendererAAMode aaMode{RendererAAMode::FXAA};
     bool bloom{true};            // bloom on/off
     float drawDistanceKm{50.0f}; // entity cull distance in km (used by SceneRenderer)
+    RendererShadowQuality shadowQuality{RendererShadowQuality::High};
+    RendererParticleDensity particleDensity{RendererParticleDensity::High};
 };
 
 // Per-frame GPU and CPU timing statistics. Populated by IRenderer::getFrameStats()

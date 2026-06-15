@@ -9,6 +9,15 @@ enum class QualityLevel : uint8_t { Low, Medium, High, Ultra };
 enum class DrawDistance : uint8_t { Low, Medium, High, Ultra };
 enum class UiScale : uint8_t { Scale75, Scale100, Scale125, Scale150 };
 
+// AA mode selector — ordinals must stay in sync with RendererAAMode in platform/RenderTypes.h.
+enum class AntiAliasingMode : uint8_t { Off, FXAA, MSAA2x, MSAA4x, MSAA8x };
+
+// Shadow quality — ordinals must stay in sync with RendererShadowQuality in platform/RenderTypes.h.
+enum class ShadowQuality : uint8_t { Off, Low, Medium, High, Ultra };
+
+// Particle density — ordinals must stay in sync with RendererParticleDensity in platform/RenderTypes.h.
+enum class ParticleDensity : uint8_t { Low, Medium, High, Ultra };
+
 struct GraphicsSettings {
     int resolutionWidth = 0;  // 0 = native
     int resolutionHeight = 0; // 0 = native
@@ -16,7 +25,9 @@ struct GraphicsSettings {
     FrameRateCap frameRateCap = FrameRateCap::Off;
     QualityLevel qualityPreset = QualityLevel::High;
     DrawDistance drawDistance = DrawDistance::High;
-    bool antiAliasing = true; // on = engine picks best method
+    AntiAliasingMode aaMode = AntiAliasingMode::FXAA;
+    ShadowQuality shadowQuality = ShadowQuality::High;
+    ParticleDensity particleDensity = ParticleDensity::High;
     UiScale uiScale = UiScale::Scale100;
     int cockpitFov = 90; // degrees, clamped [60, 120]
 };

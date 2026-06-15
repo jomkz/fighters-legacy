@@ -512,7 +512,10 @@ struct MockRenderer : public IRenderer {
         ++setSceneCount;
         lastScene = scene;
     }
-    void applySettings(const RendererSettings&) override {}
+    RendererSettings lastApplied{};
+    void applySettings(const RendererSettings& s) override {
+        lastApplied = s;
+    }
     FrameStats getFrameStats() const override {
         return {};
     }
