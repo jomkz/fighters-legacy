@@ -168,7 +168,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // m_groundElevation scalar for each entity's FlightIntegrator::step() call.
     // Requires TerrainStreamer::heightAt() to be thread-safe (shared_mutex). Call before
     // gameLoop.start().
-    void setGroundElevationQuery(std::function<float(float, float)> fn);
+    void setGroundElevationQuery(std::function<float(double, double)> fn);
 
     // Set pre-cached peer spawn positions [x, y, z] in world space.
     // y must already include the terrain height + AGL offset, computed on the main thread
@@ -179,10 +179,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
     // World-XZ position of the most recently stepped peer entity (sim thread writes;
     // main thread may read to steer terrain loading).
-    float cachedEntityX() const noexcept {
+    double cachedEntityX() const noexcept {
         return m_entityX.load(std::memory_order_relaxed);
     }
-    float cachedEntityZ() const noexcept {
+    double cachedEntityZ() const noexcept {
         return m_entityZ.load(std::memory_order_relaxed);
     }
 
@@ -308,8 +308,8 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     uint64_t m_weatherBroadcastTick{0};        // throttle weather broadcasts to ~6 Hz
     uint32_t m_turbRng{0xCAFEBABEu};           // per-broadcaster RNG for turbulence perturbation
     std::atomic<float> m_groundElevation{0.f}; // floor elevation passed to each FlightIntegrator::step
-    std::atomic<float> m_entityX{0.f};         // last stepped entity world-X (sim writes; main reads)
-    std::atomic<float> m_entityZ{0.f};         // last stepped entity world-Z
+    std::atomic<double> m_entityX{0.0};        // last stepped entity world-X (sim writes; main reads)
+    std::atomic<double> m_entityZ{0.0};        // last stepped entity world-Z
 
     std::vector<std::array<double, 3>> m_spawnPoints; // pre-cached [x,y,z]; sim-thread read-only after start
     uint32_t m_nextSpawnIdx{0};                       // round-robin counter; sim-thread only
@@ -354,7 +354,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
 
     // Per-entity terrain height query (sim-thread only). When set, called each tick per entity instead
     // of the global m_groundElevation scalar.
-    std::function<float(float, float)> m_groundQuery;
+    std::function<float(double, double)> m_groundQuery;
 
     // Network admin channel state (set before gameLoop.start(); read on sim thread only).
     std::string m_operatorPassword;                               // empty = admin channel disabled

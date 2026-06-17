@@ -380,7 +380,7 @@ int main(int argc, char** argv) {
     }
     // Per-entity terrain height query: sim thread calls heightAt() (thread-safe via shared_mutex).
     broadcaster.setGroundElevationQuery(
-        [&terrainStreamer](float x, float z) { return static_cast<float>(terrainStreamer.heightAt(x, z)); });
+        [&terrainStreamer](double x, double z) { return static_cast<float>(terrainStreamer.heightAt(x, z)); });
     // Resolve EntityDef::flightModelId -> parsed FlightModelData on the spawn path. Loads the raw
     // TOML asset via AssetManager, parses it with engine-flight's parseFlightModel, and caches the
     // result by id (sim-thread-only access). Empty/unknown ids fall back to the builtin model in
@@ -514,8 +514,8 @@ int main(int argc, char** argv) {
             beacon->tick(broadcaster.getPeerCount());
         p.asyncFilesystem->service();
         // Follow the entity so terrain chunks are loaded at its current position.
-        const double entityX = static_cast<double>(broadcaster.cachedEntityX());
-        const double entityZ = static_cast<double>(broadcaster.cachedEntityZ());
+        const double entityX = broadcaster.cachedEntityX();
+        const double entityZ = broadcaster.cachedEntityZ();
         terrainStreamer.update(glm::dvec3(entityX, 0.0, entityZ));
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }

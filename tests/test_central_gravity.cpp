@@ -11,7 +11,7 @@ using Catch::Approx;
 
 TEST_CASE("CentralGravityField: gravity at origin matches surface g", "[gravity]") {
     fl::CentralGravityField g(6'371'000.f, 9.80665f);
-    float pos[3] = {0.f, 0.f, 0.f};
+    double pos[3] = {0.0, 0.0, 0.0};
     auto a = g.accelWorld(pos);
     CHECK(a[0] == Approx(0.f).margin(1e-4f));
     CHECK(a[1] == Approx(-9.80665f).epsilon(1e-4));
@@ -21,7 +21,7 @@ TEST_CASE("CentralGravityField: gravity at origin matches surface g", "[gravity]
 TEST_CASE("CentralGravityField: gravity weaker at altitude", "[gravity]") {
     const float R = 6'371'000.f;
     fl::CentralGravityField g(R, 9.80665f);
-    float pos[3] = {0.f, 1000.f, 0.f}; // 1 km above surface
+    double pos[3] = {0.0, 1000.0, 0.0}; // 1 km above surface
     auto a = g.accelWorld(pos);
     const float mag = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
     CHECK(mag < 9.80665f);
@@ -32,7 +32,7 @@ TEST_CASE("CentralGravityField: gravity weaker at altitude", "[gravity]") {
 
 TEST_CASE("CentralGravityField: gravity tilts toward planet centre at lateral position", "[gravity]") {
     fl::CentralGravityField g(6'371'000.f, 9.80665f);
-    float pos[3] = {1e5f, 0.f, 0.f}; // 100 km from Z-axis
+    double pos[3] = {1e5, 0.0, 0.0}; // 100 km from Z-axis
     auto a = g.accelWorld(pos);
     CHECK(a[0] < 0.f); // gravity has negative X component (toward origin)
     CHECK(a[1] < 0.f); // still has downward (negative Y) component
@@ -43,15 +43,15 @@ TEST_CASE("CentralGravityField: geodeticAltitude returns distance from surface",
     const float R = 6'371'000.f;
     fl::CentralGravityField g(R, 9.80665f);
 
-    float atSurface[3] = {0.f, 0.f, 0.f};
-    CHECK(g.geodeticAltitude(atSurface) == Approx(0.f).margin(1.f));
+    double atSurface[3] = {0.0, 0.0, 0.0};
+    CHECK(g.geodeticAltitude(atSurface) == Approx(0.0).margin(1.0));
 
-    float at1km[3] = {0.f, 1000.f, 0.f};
-    CHECK(g.geodeticAltitude(at1km) == Approx(1000.f).epsilon(1e-4));
+    double at1km[3] = {0.0, 1000.0, 0.0};
+    CHECK(g.geodeticAltitude(at1km) == Approx(1000.0).epsilon(1e-4));
 
     // Lateral position: world-Y does not equal geodetic altitude
-    float lateral[3] = {1e5f, 0.f, 0.f};
-    const float r = std::sqrt(1e5f * 1e5f + R * R);
+    double lateral[3] = {1e5, 0.0, 0.0};
+    const double r = std::sqrt(1e5 * 1e5 + static_cast<double>(R) * R);
     CHECK(g.geodeticAltitude(lateral) == Approx(r - R).epsilon(1e-4));
     CHECK(g.geodeticAltitude(lateral) != Approx(lateral[1]).epsilon(1e-2));
 }
@@ -59,7 +59,7 @@ TEST_CASE("CentralGravityField: geodeticAltitude returns distance from surface",
 TEST_CASE("CentralGravityField: earthInstance singleton matches explicit construction", "[gravity]") {
     const auto& e = fl::CentralGravityField::earthInstance();
     fl::CentralGravityField explicit_{6'371'000.f, 9.80665f};
-    float pos[3] = {0.f, 0.f, 0.f};
+    double pos[3] = {0.0, 0.0, 0.0};
     auto a1 = e.accelWorld(pos);
     auto a2 = explicit_.accelWorld(pos);
     CHECK(a1[1] == Approx(a2[1]).epsilon(1e-6));
@@ -69,7 +69,7 @@ TEST_CASE("CentralGravityField: guard at planet centre returns zero", "[gravity]
     const float R = 6'371'000.f;
     fl::CentralGravityField g(R, 9.80665f);
     // Planet centre is at {0, -R, 0}
-    float centre[3] = {0.f, -R, 0.f};
+    double centre[3] = {0.0, -static_cast<double>(R), 0.0};
     auto a = g.accelWorld(centre);
     CHECK(a[0] == 0.f);
     CHECK(a[1] == 0.f);
@@ -78,11 +78,11 @@ TEST_CASE("CentralGravityField: guard at planet centre returns zero", "[gravity]
 
 TEST_CASE("IGravityField default: geodeticAltitude returns world-Y", "[gravity]") {
     struct MinimalField : fl::IGravityField {
-        std::array<float, 3> accelWorld(const float[3]) const override {
+        std::array<float, 3> accelWorld(const double[3]) const override {
             return {};
         }
     };
     MinimalField f;
-    float p[3] = {1e5f, 500.f, 2e4f};
-    CHECK(f.geodeticAltitude(p) == Approx(500.f).margin(1e-4f));
+    double p[3] = {1e5, 500.0, 2e4};
+    CHECK(f.geodeticAltitude(p) == Approx(500.0).margin(1e-4));
 }

@@ -878,7 +878,7 @@ TEST_CASE("WorldBroadcaster: setGroundElevationQuery is called per entity during
     f.registry.registerType(makeWbEntityDef());
 
     int queryCalls = 0;
-    f.broadcaster.setGroundElevationQuery([&](float, float) {
+    f.broadcaster.setGroundElevationQuery([&](double, double) {
         ++queryCalls;
         return 42.f;
     });

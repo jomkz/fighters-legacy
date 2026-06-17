@@ -83,7 +83,7 @@ Phase 3 acceptance is a **complete engine layer** — all features testable with
 - Snapshot interest management active; bandwidth under threshold with 20 simulated clients.
 - LuaSandbox wired to `IEntityController`; a scripted sandbox entity responds correctly in tests.
 - Server-side AI flight controller framework: at least one AI entity maintains altitude in sandbox.
-- `FlightState::pos` is `double[3]`; all integrator math consistent with dvec3 world positions.
+- `FlightState::pos_world` is `double[3]`; all integrator math consistent with dvec3 world positions.
 - Pilot profiles persist across sessions; stats updated at mission debrief.
 - Advanced quality settings: shadow resolution, particle density, and AA mode selectable and saved to user.toml.
 - Per-vertex spherical terrain mesh correction: no visible seams or skirts at altitude.
