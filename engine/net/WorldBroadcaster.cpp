@@ -25,6 +25,9 @@
 #include <string_view>
 #include <vector>
 
+static_assert(std::atomic<double>::is_always_lock_free,
+              "WorldBroadcaster requires lock-free double atomics for entity XZ cache");
+
 // ---------------------------------------------------------------------------
 // Control sources
 // ---------------------------------------------------------------------------
@@ -232,7 +235,7 @@ void WorldBroadcaster::setGravityField(const IGravityField& field, float planetR
     m_planetRadiusKm = planetRadiusKm;
 }
 
-void WorldBroadcaster::setGroundElevationQuery(std::function<float(float, float)> fn) {
+void WorldBroadcaster::setGroundElevationQuery(std::function<float(double, double)> fn) {
     m_groundQuery = std::move(fn);
 }
 
@@ -714,9 +717,9 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
         model = BuiltinFlightModel::get();
 
     FlightState fs{};
-    fs.pos_world[0] = static_cast<float>(st->transform.pos[0]);
-    fs.pos_world[1] = static_cast<float>(st->transform.pos[1]);
-    fs.pos_world[2] = static_cast<float>(st->transform.pos[2]);
+    fs.pos_world[0] = st->transform.pos[0];
+    fs.pos_world[1] = st->transform.pos[1];
+    fs.pos_world[2] = st->transform.pos[2];
     fs.fuel_kg = model->geometry.fuel_kg;
     fs.mass_kg = model->geometry.mass_kg + fs.fuel_kg;
     fs.throttle_actual = initialThrottle;
@@ -758,9 +761,9 @@ void WorldBroadcaster::stepFlightSim(FlightIntegrator& fi, EntityState& state, c
     quatRotate(fs.quat, fs.vel_body, wv);
 
     // Coordinate conventions are identical (both Y-up) — copy directly.
-    state.transform.pos[0] = static_cast<double>(fs.pos_world[0]);
-    state.transform.pos[1] = static_cast<double>(fs.pos_world[1]);
-    state.transform.pos[2] = static_cast<double>(fs.pos_world[2]);
+    state.transform.pos[0] = fs.pos_world[0];
+    state.transform.pos[1] = fs.pos_world[1];
+    state.transform.pos[2] = fs.pos_world[2];
 
     state.transform.vel[0] = wv[0];
     state.transform.vel[1] = wv[1];

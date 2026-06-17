@@ -19,23 +19,23 @@ class CentralGravityField final : public IGravityField {
   public:
     explicit CentralGravityField(float R = 6'371'000.f, float g = 9.80665f) : m_GM(g * R * R), m_centerY(-R) {}
 
-    std::array<float, 3> accelWorld(const float p[3]) const override {
-        const float dx = p[0];
-        const float dy = p[1] - m_centerY; // p[1] - (-R) = p[1] + R
-        const float dz = p[2];
-        const float r2 = dx * dx + dy * dy + dz * dz;
-        if (r2 < 1.f)
+    std::array<float, 3> accelWorld(const double p[3]) const override {
+        const double dx = p[0];
+        const double dy = p[1] - static_cast<double>(m_centerY); // p[1] - (-R) = p[1] + R
+        const double dz = p[2];
+        const double r2 = dx * dx + dy * dy + dz * dz;
+        if (r2 < 1.0)
             return {0.f, 0.f, 0.f}; // at or inside planet centre — avoid divide-by-zero
-        const float r = std::sqrt(r2);
-        const float a = -m_GM / r2; // magnitude (negative = toward centre)
-        return {a * dx / r, a * dy / r, a * dz / r};
+        const double r = std::sqrt(r2);
+        const double a = -static_cast<double>(m_GM) / r2; // magnitude (negative = toward centre)
+        return {static_cast<float>(a * dx / r), static_cast<float>(a * dy / r), static_cast<float>(a * dz / r)};
     }
 
-    float geodeticAltitude(const float p[3]) const override {
-        const float dx = p[0];
-        const float dy = p[1] - m_centerY;
-        const float dz = p[2];
-        return std::sqrt(dx * dx + dy * dy + dz * dz) + m_centerY; // |r_vec| - R
+    double geodeticAltitude(const double p[3]) const override {
+        const double dx = p[0];
+        const double dy = p[1] - static_cast<double>(m_centerY);
+        const double dz = p[2];
+        return std::sqrt(dx * dx + dy * dy + dz * dz) + static_cast<double>(m_centerY); // |r_vec| - R
     }
 
     // Pre-built Earth instance (R = 6 371 000 m, g = 9.80665 m/s²).

@@ -899,3 +899,25 @@ TEST_CASE("FlightIntegrator: CentralGravityField at lateral position tilts gravi
     // is ~-0.154 m/s²; after one tick vel_body[0] ≈ -0.154/60 ≈ -0.00257 m/s.
     CHECK(fi.state().vel_body[0] < 0.f);
 }
+
+TEST_CASE("Integrator: double-precision position accumulates at large world offset", "[flight]") {
+    // At x = 1e5 m, float ULP ~0.0078 m exceeds the per-step lateral gravity
+    // displacement toward planet centre (~0.001 m).  With float pos_world the
+    // position never moved; with double it must.
+    fl::FlightState s{};
+    s.pos_world[0] = 1e5;
+    s.pos_world[1] = 500.0;
+
+    fl::FlightIntegrator fi(makeData());
+    const auto& cg = fl::CentralGravityField::earthInstance();
+    fi.setGravityField(cg);
+    fi.reset(s);
+
+    const double x0 = fi.state().pos_world[0];
+    fl::ControlInput ctrl{};
+    fl::WindInfluence wind{};
+    fi.step(1.0f / 60.f, ctrl, {}, wind);
+
+    CHECK(fi.state().pos_world[0] != x0);
+    CHECK(std::isfinite(fi.state().pos_world[0]));
+}

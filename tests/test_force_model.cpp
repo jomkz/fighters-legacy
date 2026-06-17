@@ -46,7 +46,7 @@ TEST_CASE("FixedWingForceModel produces forward thrust at full throttle", "[forc
 
 namespace {
 struct ZeroGravity final : IGravityField {
-    std::array<float, 3> accelWorld(const float[3]) const override {
+    std::array<float, 3> accelWorld(const double[3]) const override {
         return {0.f, 0.f, 0.f};
     }
 };

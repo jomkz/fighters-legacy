@@ -3315,3 +3315,30 @@ TEST_CASE("WorldBroadcaster: setGravityField propagates planetRadiusKm to MsgCon
     fl::MsgConnectAck ack = parseSendAck(net);
     CHECK(ack.planetRadiusKm == Catch::Approx(6371.f).epsilon(1e-4f));
 }
+
+TEST_CASE("WorldBroadcaster: spawn position preserves sub-mm precision at large world offset", "[world_broadcaster]") {
+    // At x = 1e5 m, float ULP is ~0.0119 m — a 1 mm fractional component would be
+    // rounded away when storing into float pos_world.  With double pos_world the
+    // 1 mm offset must survive the spawn -> integrator -> broadcast round-trip.
+    MockLogger logger;
+    MockNetwork net;
+    net.peerAddresses[0] = "1.2.3.4:5000";
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setSpawnPoints({std::array<double, 3>{1e5 + 1e-3, 500.0, 0.0}});
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    REQUIRE(!net.broadcasts.empty());
+    const auto& pkt = net.broadcasts.back();
+    REQUIRE(pkt.size() >= sizeof(fl::MsgWorldSnapshotHeader) + sizeof(fl::MsgEntityEntry));
+    fl::MsgEntityEntry e;
+    std::memcpy(&e, pkt.data() + sizeof(fl::MsgWorldSnapshotHeader), sizeof(e));
+
+    // With float pos_world the spawn would be rounded to exactly 1e5; the 1 mm fractional
+    // offset must be preserved.  Lateral gravity (~4e-7 m/tick) is negligible.
+    CHECK(e.pos[0] > 1e5 + 5e-4);
+}
