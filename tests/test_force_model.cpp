@@ -68,7 +68,7 @@ FlightState restingState() {
     return fs;
 }
 
-float fallTo(FlightIntegrator& fi) {
+double fallTo(FlightIntegrator& fi) {
     ControlInput ctrl{}; // zero throttle: only gravity + the force model act at rest
     for (int i = 0; i < 60; ++i)
         fi.step(1.f / 60.f, ctrl, {}, {}, -1.0e6f);
@@ -80,7 +80,7 @@ TEST_CASE("FlightIntegrator dispatches to the injected gravity field", "[force_m
     // Default flat gravity: a craft at rest with no thrust falls.
     FlightIntegrator def(BuiltinFlightModel::get());
     def.reset(restingState());
-    const float defaultY = fallTo(def);
+    const double defaultY = fallTo(def);
     CHECK(defaultY < 10000.f); // fell under gravity
 
     // Zero-g field injected: the same craft stays put.
@@ -88,7 +88,7 @@ TEST_CASE("FlightIntegrator dispatches to the injected gravity field", "[force_m
     ZeroGravity zg;
     zero.setGravityField(zg);
     zero.reset(restingState());
-    const float zeroY = fallTo(zero);
+    const double zeroY = fallTo(zero);
     CHECK_THAT(zeroY, WithinAbs(10000.0, 1e-2)); // no vertical motion without gravity
     CHECK(zeroY > defaultY);                     // demonstrably different from the default
 }
@@ -98,6 +98,6 @@ TEST_CASE("FlightIntegrator dispatches to the injected force model", "[force_mod
     ConstantUpForce up;
     fi.setForceModel(up);
     fi.reset(restingState());
-    const float y = fallTo(fi);
-    CHECK(y > 10000.f); // the constant upward force model lifted the craft instead of letting it fall
+    const double y = fallTo(fi);
+    CHECK(y > 10000.0); // the constant upward force model lifted the craft instead of letting it fall
 }
