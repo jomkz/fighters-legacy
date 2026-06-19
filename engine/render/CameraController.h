@@ -5,28 +5,27 @@
 
 #include <cstdint>
 #include <glm/glm.hpp>
-#include <glm/gtc/quaternion.hpp>
 
 namespace fl {
 
 enum class CameraMode : uint8_t {
-    Cockpit, // F1: camera at entity; RMB held to look around
-    Chase,   // F2: orbit around entity; LMB drag to rotate; scroll to zoom
-    Free,    // F4: fully free camera; WASD/QE move anywhere, LMB drag orbits
+    Cockpit, // F1: locked inside the entity, looking out (the entity model is hidden in this view)
+    Chase,   // F2: locked behind the entity, following its heading
+    Free,    // F4: free-fly camera; moves anywhere in the world (only constraint: above the ground)
 };
 
 // Produces a CameraView each frame for use with IRenderer::setScene.
 //
-// Cockpit mode — camera sits at the entity's world position, looking along its
-//   body forward axis. Call setTarget() + setCockpitLook() each frame.
-//   RMB drag accumulates look offsets via setCockpitLook().
+// There is a single underlying camera: an eye position plus a look direction (forward + up).
+// CameraInput computes that pose every frame and calls setPose(). The three modes are just
+// different ways of driving the one camera:
+//   Free    — the pose is driven directly by the user (WASD/QE move the eye, mouse turns the view),
+//             clamped so it cannot pass through the ground.
+//   Chase   — the pose is computed to sit behind the entity and follow it.
+//   Cockpit — the pose is locked to the entity (eye at the entity, looking along its forward axis).
 //
-// Chase mode — spherical orbit around the entity. Same math as Free mode;
-//   the only difference is that CameraInput locks the pivot to the entity
-//   position each frame. Call setFreeOrbit(entityPos, yaw, pitch, radius).
-//
-// Free mode — spherical orbit around a freely movable world pivot.
-//   WASD/QE pan the pivot; LMB drag orbits; scroll zooms.
+// mode() is a label read by the game layer (HUD, hiding the ownship in cockpit); it does not change
+// how view() builds the camera — every mode resolves to the same setPose()/view() path.
 //
 // All state is main-thread-only. No input processing is done here.
 class CameraController {
@@ -36,22 +35,11 @@ class CameraController {
     void setMode(CameraMode mode) noexcept;
     [[nodiscard]] CameraMode mode() const noexcept;
 
-    // Orbit parameters — used by both Chase and Free modes.
-    // Chase: caller passes entity position as pivot each frame.
-    // Free:  caller passes freely movable world reference point as pivot.
-    // pivot    — world-space look target (m).
-    // yaw      — horizontal rotation, degrees (0 = camera south of pivot).
-    // pitch    — elevation angle, degrees (positive = camera above horizon).
-    // distance — camera distance from pivot (m).
-    void setFreeOrbit(glm::dvec3 pivot, float yaw, float pitch, float distance) noexcept;
-
-    // Cockpit target (call each frame when in Cockpit mode).
-    void setTarget(glm::dvec3 worldPosition, glm::quat worldOrientation) noexcept;
-
-    // Cockpit look offsets from entity forward, in degrees (call each frame when in Cockpit mode).
-    // yawDeg   — left/right offset; 0 = entity forward, ±180 = looking behind.
-    // pitchDeg — up/down offset; positive = up, clamped to ±80° by caller.
-    void setCockpitLook(float yawDeg, float pitchDeg) noexcept;
+    // Set the camera pose for this frame. Called by CameraInput once per frame for every mode.
+    // eye     — camera world position (m).
+    // forward — view direction (need not be normalized).
+    // up      — approximate up vector (need not be exactly orthogonal to forward).
+    void setPose(glm::dvec3 eye, glm::vec3 forward, glm::vec3 up) noexcept;
 
     // Build the CameraView for the current frame.
     // aspectRatio — viewport width / height.
@@ -62,17 +50,10 @@ class CameraController {
   private:
     CameraMode m_mode{CameraMode::Cockpit};
 
-    // Shared orbit state (Chase and Free)
-    glm::dvec3 m_pivot{};
-    float m_yaw{0.0f};
-    float m_pitch{20.0f};
-    float m_distance{50.0f};
-
-    // Cockpit state
-    glm::dvec3 m_targetPos{};
-    glm::quat m_targetOri{glm::quat(1.0f, 0.0f, 0.0f, 0.0f)};
-    float m_cockpitYaw{0.0f};
-    float m_cockpitPitch{0.0f};
+    // Single camera pose (world space). worldOrigin = m_eye; view = lookAt(0, m_forward, m_up).
+    glm::dvec3 m_eye{};
+    glm::vec3 m_forward{0.0f, 0.0f, -1.0f};
+    glm::vec3 m_up{0.0f, 1.0f, 0.0f};
 };
 
 } // namespace fl

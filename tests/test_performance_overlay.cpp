@@ -134,6 +134,65 @@ TEST_CASE("PerformanceOverlay: Full mode bar graph uses only the five expected U
     }
 }
 
+TEST_CASE("PerformanceOverlay: setSceneInfo appends CAM and ENT lines after perf lines", "[perf_overlay]") {
+    PerformanceOverlay ov;
+    ov.setMode(OverlayMode::Compact);
+
+    FrameStats stats{};
+    stats.frameDtMs = 16.6f;
+    ov.update(stats, 1, 16.7f);
+    const size_t perfLines = ov.lines().size();
+
+    // Camera at (10, 600, 20) looking level; entity 50 m forward at the same height.
+    CameraView cam{};
+    cam.worldOrigin = glm::dvec3{10.0, 600.0, 20.0};
+    cam.view = glm::mat4(1.0f); // identity: forward = -Z, pitch 0
+    const glm::dvec3 ent{10.0, 600.0, -30.0};
+    ov.setSceneInfo("FREE", cam, &ent, 575.0, 575.0);
+
+    auto lines = ov.lines();
+    REQUIRE(lines.size() == perfLines + 2u);
+    const std::string camLine(lines[perfLines]);
+    const std::string entLine(lines[perfLines + 1]);
+    CHECK(camLine.find("CAM FREE") != std::string::npos);
+    CHECK(camLine.find("AGL=25.0") != std::string::npos); // 600 - 575
+    CHECK(entLine.find("ENT") != std::string::npos);
+    CHECK(entLine.find("AGL=25.0") != std::string::npos);
+}
+
+TEST_CASE("PerformanceOverlay: setSceneInfo is a no-op when overlay is Off", "[perf_overlay]") {
+    PerformanceOverlay ov;
+    ov.setMode(OverlayMode::Off);
+
+    FrameStats stats{};
+    ov.update(stats, 0, 16.7f);
+
+    CameraView cam{};
+    cam.worldOrigin = glm::dvec3{0.0, 100.0, 0.0};
+    cam.view = glm::mat4(1.0f);
+    ov.setSceneInfo("CHASE", cam, nullptr, 0.0, 0.0);
+
+    CHECK(ov.lines().empty());
+}
+
+TEST_CASE("PerformanceOverlay: setSceneInfo with null entity emits only the CAM line", "[perf_overlay]") {
+    PerformanceOverlay ov;
+    ov.setMode(OverlayMode::Compact);
+
+    FrameStats stats{};
+    ov.update(stats, 0, 16.7f);
+    const size_t perfLines = ov.lines().size();
+
+    CameraView cam{};
+    cam.worldOrigin = glm::dvec3{0.0, 100.0, 0.0};
+    cam.view = glm::mat4(1.0f);
+    ov.setSceneInfo("FREE", cam, nullptr, 50.0, 0.0);
+
+    auto lines = ov.lines();
+    REQUIRE(lines.size() == perfLines + 1u);
+    CHECK(std::string(lines.back()).find("CAM FREE") != std::string::npos);
+}
+
 TEST_CASE("PerformanceOverlay: setMode persists across update calls", "[perf_overlay]") {
     PerformanceOverlay ov;
     ov.setMode(OverlayMode::Full);

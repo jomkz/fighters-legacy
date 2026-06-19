@@ -153,7 +153,9 @@ static void updateAudioListener(IAudio& audio, const CameraView& cam, const glm:
 }
 
 static void updatePerfOverlay(GameConsole& console, IRenderer& renderer, PerformanceOverlay& overlay,
-                              const fl::SimRenderBridge& bridge, UserConfig& userConfig, bool inFlight) {
+                              const fl::SimRenderBridge& bridge, UserConfig& userConfig, bool inFlight,
+                              fl::CameraMode camMode, const CameraView& cam, const fl::EntityRenderEntry* playerEntry,
+                              fl::TerrainStreamer* terrain) {
     if (!inFlight) {
         overlay.setMode(OverlayMode::Off);
         renderer.setOverlayLines({});
@@ -173,6 +175,18 @@ static void updatePerfOverlay(GameConsole& console, IRenderer& renderer, Perform
 
     const uint32_t entityCount = bridge.hasSnapshot() ? static_cast<uint32_t>(bridge.current().entries.size()) : 0u;
     overlay.update(renderer.getFrameStats(), entityCount, 1000.0f / 60.0f);
+
+    // Append live camera + entity readouts (so the underground/aim issues are visible in real time).
+    if (overlay.mode() != OverlayMode::Off) {
+        const char* modeStr = camMode == fl::CameraMode::Cockpit ? "COCKPIT"
+                              : camMode == fl::CameraMode::Chase ? "CHASE"
+                                                                 : "FREE";
+        const double terrCam = terrain ? terrain->heightAt(cam.worldOrigin.x, cam.worldOrigin.z) : 0.0;
+        const double terrEnt =
+            (terrain && playerEntry) ? terrain->heightAt(playerEntry->position.x, playerEntry->position.z) : 0.0;
+        overlay.setSceneInfo(modeStr, cam, playerEntry ? &playerEntry->position : nullptr, terrCam, terrEnt);
+    }
+
     renderer.setOverlayLines(overlay.lines());
 }
 
@@ -566,13 +580,9 @@ void Game::startGame() {
     d.session.serverReady.store(false, std::memory_order_relaxed);
     d.session.sessionFailure.store(SessionFailure::None, std::memory_order_relaxed);
 
-    // Reset camera to a safe above-terrain default so that if any 3D rendering
-    // happens before the camera is primed from the first entity snapshot (e.g. due
-    // to stale state from a previous session), the view starts above the terrain
-    // rather than underground.  The camera prime at the Loading->Flight transition
-    // will immediately overwrite this with the actual entity position.
-    d.services.cameraController.setTarget(glm::dvec3{0.0, 2000.0, 0.0}, glm::quat{1.0f, 0.0f, 0.0f, 0.0f});
-    d.services.cameraController.setFreeOrbit(glm::dvec3{0.0, 2000.0, 0.0}, 0.0f, 20.0f, 200.0f);
+    // The camera pose is recomputed from the entity snapshot every Flight frame (CameraInput runs
+    // before the render, and 3D rendering is skipped during the loading overlay), so no stale-state
+    // reset is needed here.
 
     // Register the builtin entity type for the no-pack sandbox path.
     if (d.services.outcome == FirstRunOutcome::LaunchSandboxInspector) {
@@ -582,7 +592,6 @@ void Game::startGame() {
         debugDef.category = fl::ObjectCategory::AirVehicle;
         debugDef.maxHp = 100.0f;
         d.services.entityRegistry.registerType(std::move(debugDef));
-        d.services.cameraController.setFreeOrbit({0.0, 2000.0, 0.0}, 0.0f, 30.0f, 30.0f);
     }
 
     const bool isMultiplayer = !d.services.connectHost.empty();
@@ -870,13 +879,6 @@ void Game::run() {
             running = false;
         } else if (next != cur) {
             handleTransition(next);
-            // Prime the camera immediately when entering FlightScreen so the transition
-            // frame renders from the correct position (inside cockpit or behind entity)
-            // rather than from the stale position left over from the previous session.
-            if (next == Screen::Flight && playerEntry) {
-                d.services.cameraController.setTarget(playerEntry->position, playerEntry->orientation);
-                d.services.cameraController.setFreeOrbit(playerEntry->position, 270.0f, 10.0f, 80.0f);
-            }
         }
 
         // Null playerEntry if stopGame() reset the bridge mid-frame.
@@ -909,9 +911,9 @@ void Game::run() {
                 d.services.precipController.build(d.services.env, cam, isSnow, d.services.particleSystem));
         }
 
-        // Console HUD (show position if we have a valid camera).
-        d.services.gameConsole->buildHud(camOrigin != glm::dvec3{} ? &camOrigin : nullptr,
-                                         playerEntry ? &playerEntry->position : nullptr);
+        // Console HUD: entity position widget (toggle_pos). Camera/entity debug now lives in
+        // the F3 performance overlay.
+        d.services.gameConsole->buildHud(playerEntry ? &playerEntry->position : nullptr);
 
         // Overlay layers: screen content + server notice + console.
         d.services.p.renderer->submitOverlayElements(d.services.screenMgr->active().buildElements());
@@ -919,7 +921,8 @@ void Game::run() {
         d.services.p.renderer->setConsoleElements(d.services.gameConsole->elements());
 
         updatePerfOverlay(*d.services.gameConsole, *d.services.p.renderer, d.services.perfOverlay,
-                          d.services.renderBridge, *d.services.userConfig, cur == Screen::Flight);
+                          d.services.renderBridge, *d.services.userConfig, cur == Screen::Flight,
+                          d.services.cameraController.mode(), cam, playerEntry, d.services.terrainStreamer.get());
 
         d.services.p.renderer->endFrame();
         d.services.p.input->flush();

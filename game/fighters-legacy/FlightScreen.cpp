@@ -50,7 +50,7 @@ Screen FlightScreen::update(IInput& input, IWindow& /*window*/) {
     m_playerEntry = findEntry(*d.renderBridge, idx, gen);
 
     d.camInput->pollModeKeys(*d.cameraController, *d.gameConsole, input, m_playerEntry);
-    d.camInput->update(*d.cameraController, m_playerEntry, *d.gameConsole);
+    d.camInput->update(*d.cameraController, m_playerEntry, *d.gameConsole, *d.terrainStreamer);
 
     const bool consoleWasOpen = d.gameConsole->isOpen();
     if (consoleWasOpen) {

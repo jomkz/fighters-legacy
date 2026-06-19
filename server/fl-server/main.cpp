@@ -347,17 +347,12 @@ int main(int argc, char** argv) {
                      "terrain: spawn-point chunk not ready within timeout; spawning at AGL only");
     };
 
-    // Ground clearance for the builtin placeholder entity. Its mesh (the tetrahedron in
-    // tools/gen_builtin_glb.py, circumradius R=20 m) is centred on the entity origin, so its
-    // lowest vertices sit R*sqrt(8/9)/2 ~= 9.43 m below the origin. The physics floor clamps the
-    // ORIGIN to the terrain, which would bury that lower half. Resting the origin this far above
-    // the terrain instead makes the placeholder sit ON the ground. (Sandbox placeholder: real
-    // content will carry per-mesh ground-contact / bounds and drop this offset.)
-    constexpr double kBuiltinEntityGroundClearanceM = 9.43;
-
+    // Entity meshes are authored with their origin at the ground-contact point (see
+    // gen_builtin_glb.py), so the physics floor can clamp the origin straight to the terrain and
+    // the mesh sits ON the ground — no per-mesh clearance offset needed.
     std::vector<std::array<double, 3>> cachedSpawns;
     {
-        const double agl = cfg.spawn.aglOffset + kBuiltinEntityGroundClearanceM;
+        const double agl = cfg.spawn.aglOffset;
         if (cfg.spawn.points.empty()) {
             // Default spawn: origin.
             constexpr double kDefaultSpawnZ = 0.0;
@@ -398,11 +393,10 @@ int main(int argc, char** argv) {
         terrainStreamer.setPlanetRadius(cfg.planetRadiusM);
     }
     // Per-entity terrain height query: sim thread calls heightAt() (thread-safe via shared_mutex).
-    // The builtin ground clearance lifts the resting origin so the placeholder mesh sits ON the
-    // terrain rather than half-buried (see kBuiltinEntityGroundClearanceM above).
-    broadcaster.setGroundElevationQuery([&terrainStreamer](double x, double z) {
-        return static_cast<float>(terrainStreamer.heightAt(x, z) + kBuiltinEntityGroundClearanceM);
-    });
+    // The entity origin is the mesh's ground-contact point, so the floor clamps it directly to the
+    // terrain — the mesh then rests ON the ground.
+    broadcaster.setGroundElevationQuery(
+        [&terrainStreamer](double x, double z) { return static_cast<float>(terrainStreamer.heightAt(x, z)); });
     // Resolve EntityDef::flightModelId -> parsed FlightModelData on the spawn path. Loads the raw
     // TOML asset via AssetManager, parses it with engine-flight's parseFlightModel, and caches the
     // result by id (sim-thread-only access). Empty/unknown ids fall back to the builtin model in
@@ -426,8 +420,7 @@ int main(int argc, char** argv) {
     // Used by FlightIntegrator::step for ground collision. Updated each frame below.
     // Peer spawn positions are set separately via setSpawnPoints() above.
     primeSpawnHeight(0.0, 0.0); // no-op if already Ready (default-spawn path primed it above)
-    broadcaster.setGroundElevation(
-        static_cast<float>(terrainStreamer.heightAt(0.0, 0.0) + kBuiltinEntityGroundClearanceM));
+    broadcaster.setGroundElevation(static_cast<float>(terrainStreamer.heightAt(0.0, 0.0)));
     if (!cfg.banlistPath.empty()) {
         auto banned = loadIpListFile(cfg.banlistPath, log);
         char buf[128];

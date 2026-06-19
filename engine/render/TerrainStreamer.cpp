@@ -324,6 +324,7 @@ std::vector<RenderItem> TerrainStreamer::getRenderItems(glm::dvec3 worldOrigin) 
             item.mesh = best->mesh;
             item.material = m_terrainMat;
             item.transform = glm::translate(glm::mat4(1.0f), relOrigin);
+            item.flags = kRenderFlagTerrain; // forward pass applies elevation/slope shading
             items.push_back(item);
         }
     }

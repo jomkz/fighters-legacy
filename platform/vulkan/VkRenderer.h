@@ -47,7 +47,8 @@ struct ForwardPushConstants {
     glm::vec4 baseColorFactor{1.0f}; // 16 bytes
     float metallicFactor{0.0f};
     float roughnessFactor{1.0f};
-    float _pad[2]{}; // 8 bytes — total = 96
+    float shadingMode{0.0f}; // 0 = normal PBR albedo, 1 = terrain elevation/slope, 2 = debug face colour
+    float _pad{};            // total = 96
 };
 static_assert(sizeof(ForwardPushConstants) <= 128);
 

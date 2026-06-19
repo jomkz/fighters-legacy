@@ -18,8 +18,8 @@
 // Typing:  ITextInputHandler delivers printable chars; special keys via IInput.
 //
 // Rendering: buildHud() populates a pre-allocated HudElement array each frame.
-// The position widget (top-right world coords) is emitted by buildHud() even
-// when the console is closed, if m_showPos is true and a player pos is supplied.
+// The entity position widget (top-right world coords) is emitted by buildHud()
+// even when the console is closed, if m_showPos is true and a player pos is supplied.
 class GameConsole : public CommandShell, public ITextInputHandler {
   public:
     explicit GameConsole(ILogger& logger, CommandRegistry& registry);
@@ -52,10 +52,9 @@ class GameConsole : public CommandShell, public ITextInputHandler {
     bool tick(IInput& input);
 
     // Rebuild HudElement list for this frame.
-    // camPos:    camera world position -- always shown at top-right when non-null.
-    // playerPos: player entity world position -- shown one line below camPos when
-    //            showPos is true and non-null.
-    void buildHud(const glm::dvec3* camPos = nullptr, const glm::dvec3* playerPos = nullptr);
+    // playerPos: player entity world position -- shown top-right when showPos (toggle_pos)
+    //            is true and non-null. Camera/entity debug readouts live in the F3 overlay.
+    void buildHud(const glm::dvec3* playerPos = nullptr);
 
     [[nodiscard]] std::span<const HudElement> elements() const {
         return {m_elems.data(), static_cast<std::size_t>(m_elemCount)};

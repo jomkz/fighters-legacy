@@ -186,6 +186,8 @@ void SceneRenderer::renderFrame(float alpha, const CameraView& camera, const Env
         item.flags = (entry.damageLevel > 0) ? kRenderFlagDamaged : 0u;
         if (shadowOnly)
             item.flags |= kRenderFlagShadowOnly;
+        if (useBuiltin)
+            item.flags |= kRenderFlagDebugFaceColor; // distinct per-face colours on the placeholder
         m_items.push_back(item);
     }
 

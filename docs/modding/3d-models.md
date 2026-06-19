@@ -45,6 +45,10 @@ faces render **blue**; inverted faces render **red**. A finished exterior should
 If you see red, recalculate normals in Edit Mode: **Mesh → Normals → Recalculate Outside**
 (`Shift+N`).
 
+**Verify with the pipeline.** `validate-mesh` checks triangle winding against the stored vertex
+normals and reports a mesh that is wound inside-out (most faces wound opposite their normals) as an
+error, with the same "Recalculate Outside" hint. Run it on your exported `.glb` before shipping.
+
 ### Reference mesh
 
 The engine's built-in placeholder (a tetrahedron — +X forward, outward normals) is the canonical
