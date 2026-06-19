@@ -128,6 +128,14 @@ void FlightIntegrator::integrateRotation(float dt) {
 
 void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEffect& payload, const WindInfluence& wind,
                             float groundElev) {
+    // Ground contact (evaluated from the start-of-step position). While the gear carries the
+    // aircraft, steady wind and turbulence do not blow it around (aero is computed from ground
+    // velocity only — see steps 2/5/8b) and a parked/slow aircraft is held by static ground
+    // friction (step 14c). Without this a stationary entity slides downwind whenever the weather
+    // changes, because the relative-airspeed model turns steady wind into aerodynamic drag.
+    constexpr float kGroundContactMarginM = 0.5f;
+    const bool inGroundContact = m_state.pos_world[1] <= groundElev + kGroundContactMarginM;
+
     // 1. Spool and optional gear/control surfaces
     advanceSpool(dt, ctrl.throttle);
     m_state.ab_engaged = ctrl.afterburner && m_data->engine.ab_thrust.has_value();
@@ -138,7 +146,9 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
         AtmosphereState atmos2 = computeAtmosphere(static_cast<float>(m_gravity->geodeticAltitude(m_state.pos_world)));
         float q_conj2[4] = {-m_state.quat[0], -m_state.quat[1], -m_state.quat[2], m_state.quat[3]};
         const float* vel = m_state.vel_body;
-        auto wind_body2 = quatRotate(q_conj2, wind.wind_world);
+        std::array<float, 3> wind_body2{};
+        if (!inGroundContact)
+            wind_body2 = quatRotate(q_conj2, wind.wind_world);
         float rel0 = vel[0] - wind_body2[0];
         float rel1 = vel[1] - wind_body2[1];
         float rel2 = vel[2] - wind_body2[2];
@@ -161,7 +171,9 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     // 5. Relative airspeed: subtract body-frame wind from aircraft velocity.
     // Aerodynamic forces depend on velocity relative to the air mass, not the ground.
     const float* vel = m_state.vel_body;
-    auto wind_body = quatRotate(q_conj, wind.wind_world);
+    std::array<float, 3> wind_body{};
+    if (!inGroundContact)
+        wind_body = quatRotate(q_conj, wind.wind_world);
     float rel0 = vel[0] - wind_body[0];
     float rel1 = vel[1] - wind_body[1];
     float rel2 = vel[2] - wind_body[2];
@@ -196,10 +208,13 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
     forces[2] += eff_mass * grav_body[2];
 
     // 8b. Turbulence: stochastic body-frame impulse (F = m*a, treating as acceleration).
-    // Steady wind is already accounted for via relative airspeed in step 5.
-    forces[0] += eff_mass * wind.turbulence_body[0];
-    forces[1] += eff_mass * wind.turbulence_body[1];
-    forces[2] += eff_mass * wind.turbulence_body[2];
+    // Steady wind is already accounted for via relative airspeed in step 5. Skipped while in
+    // ground contact — the gear absorbs gusts rather than letting them shove a parked aircraft.
+    if (!inGroundContact) {
+        forces[0] += eff_mass * wind.turbulence_body[0];
+        forces[1] += eff_mass * wind.turbulence_body[1];
+        forces[2] += eff_mass * wind.turbulence_body[2];
+    }
 
     // 9-10. Moments come from the force model (thrust magnitude and TVC are handled inside it).
     const auto& moments = fm.moment_body;
@@ -270,6 +285,26 @@ void FlightIntegrator::step(float dt, const ControlInput& ctrl, const PayloadEff
             m_state.vel_body[0] = vb[0];
             m_state.vel_body[1] = vb[1];
             m_state.vel_body[2] = vb[2];
+        }
+    }
+
+    // 14c. Static ground friction (parking brake). A stationary aircraft on the ground is held
+    // by its gear/brakes and must not creep under residual forcing (gravity tickle, numerical
+    // drift, a gust the instant before contact). Engages only at very low ground speed and
+    // near-idle throttle, so it never interferes with the takeoff roll.
+    if (m_state.pos_world[1] <= groundElev + kGroundContactMarginM) {
+        constexpr float kParkingSpeedM_s = 1.0f;  // hold below ~1 m/s of horizontal motion
+        constexpr float kParkingThrottle = 0.05f; // and only near idle
+        const float horizSpd =
+            std::sqrt(m_state.vel_body[0] * m_state.vel_body[0] + m_state.vel_body[2] * m_state.vel_body[2]);
+        if (horizSpd < kParkingSpeedM_s && ctrl.throttle < kParkingThrottle) {
+            m_state.vel_body[0] = 0.f; // forward
+            m_state.vel_body[2] = 0.f; // right (vertical vel_body[1] left to the impact clamp)
+            // Brakes/gear also resist any yaw/roll/pitch creep, so a parked aircraft is fully
+            // static (no residual rotation from settling or gusts before contact).
+            m_state.omega[0] = 0.f;
+            m_state.omega[1] = 0.f;
+            m_state.omega[2] = 0.f;
         }
     }
 

@@ -28,10 +28,11 @@ layout(location = 3) out float fragTangentHandedness;
 layout(location = 4) out vec2  fragUV;
 
 void main() {
-    // Camera-relative rendering: rebase world position to camera origin so
-    // float32 precision is safe at arbitrary theater scale.
+    // Camera-relative rendering: push.model already encodes the camera-relative transform
+    // (the CPU rebases world positions against worldOrigin in double precision before upload),
+    // so this position is already relative to the camera origin — do NOT subtract worldOrigin
+    // again here.
     vec4 worldPos = push.model * vec4(inPosition, 1.0);
-    worldPos.xyz -= camera.worldOrigin.xyz;
 
     gl_Position = camera.proj * camera.view * worldPos;
 

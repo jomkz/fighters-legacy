@@ -165,3 +165,52 @@ TEST_CASE("material with known extension produces warning not error", "[validate
     CHECK(r.errors.empty());
     CHECK(!r.warnings.empty());
 }
+
+// One triangle p0=(0,0,0) p1=(1,0,0) p2=(0,0,1): winding cross-product = -Y. With normals = -Y
+// (consistent / CCW-from-outside) the winding check passes; with normals = +Y the mesh is
+// inside-out and must be flagged. Buffer = 3 POSITION vec3 (36 B) + 3 NORMAL vec3 (36 B) = 72 B.
+TEST_CASE("mesh with consistent winding passes winding check", "[validate-mesh]") {
+    auto r = validateMeshFromJson(R"({
+        "asset": {"version": "2.0"},
+        "scene": 0, "scenes": [{"nodes": [0]}],
+        "nodes": [{"name": "hull", "mesh": 0}],
+        "meshes": [{"name": "hull", "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "mode": 4}]}],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [1,0,1]},
+            {"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3"}
+        ],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": 36},
+            {"buffer": 0, "byteOffset": 36, "byteLength": 36}
+        ],
+        "buffers": [{"byteLength": 72, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAA"}]
+    })");
+    CHECK(r.ok);
+    CHECK(r.errors.empty());
+}
+
+TEST_CASE("mesh wound inside-out fails winding check", "[validate-mesh]") {
+    auto r = validateMeshFromJson(R"({
+        "asset": {"version": "2.0"},
+        "scene": 0, "scenes": [{"nodes": [0]}],
+        "nodes": [{"name": "hull", "mesh": 0}],
+        "meshes": [{"name": "hull", "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "mode": 4}]}],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [1,0,1]},
+            {"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3"}
+        ],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": 36},
+            {"buffer": 0, "byteOffset": 36, "byteLength": 36}
+        ],
+        "buffers": [{"byteLength": 72, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAA"}]
+    })");
+    CHECK_FALSE(r.ok);
+    bool found = false;
+    for (const auto& e : r.errors)
+        if (e.find("inside-out") != std::string::npos) {
+            found = true;
+            break;
+        }
+    CHECK(found);
+}

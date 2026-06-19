@@ -603,6 +603,53 @@ TEST_CASE("FlightIntegrator: nonzero turbulence perturbs velocity", "[flight_int
     CHECK(fi1.state().vel_body[0] != fi2.state().vel_body[0]);
 }
 
+TEST_CASE("FlightIntegrator: parked aircraft does not drift under steady wind", "[flight_integrator][weather]") {
+    // Regression: a stationary entity on the ground used to slide downwind whenever the weather
+    // changed, because the relative-airspeed model turns steady wind into aerodynamic drag. The
+    // gear now suppresses wind/turbulence forcing while in ground contact.
+    auto d = makeData();
+    fl::FlightIntegrator fi(d);
+    fl::FlightState s{};
+    s.pos_world[1] = 100.f; // sitting on the ground (groundElev = 100)
+    s.mass_kg = 10000.f;
+    s.fuel_kg = 0.f;
+    fi.reset(s);
+
+    fl::ControlInput ctrl{}; // idle throttle, no pilot input
+    fl::PayloadEffect px{};
+    fl::WindInfluence wind{};
+    wind.wind_world[0] = 50.f;     // strong steady wind
+    wind.turbulence_body[2] = 5.f; // and gusts
+
+    for (int i = 0; i < 600; ++i) // 10 simulated seconds
+        fi.step(1.f / 60.f, ctrl, px, wind, /*groundElev=*/100.f);
+
+    CHECK(std::abs(fi.state().pos_world[0]) < 0.5);
+    CHECK(std::abs(fi.state().pos_world[2]) < 0.5);
+}
+
+TEST_CASE("FlightIntegrator: ground parking hold does not block takeoff roll", "[flight_integrator]") {
+    // The static parking hold engages only near idle throttle, so full throttle still accelerates
+    // the aircraft down the runway despite being in ground contact.
+    auto d = makeData();
+    fl::FlightIntegrator fi(d);
+    fl::FlightState s{};
+    s.pos_world[1] = 100.f;
+    s.mass_kg = 10000.f;
+    s.fuel_kg = 2000.f;
+    s.mass_kg += s.fuel_kg;
+    fi.reset(s);
+
+    fl::ControlInput ctrl{};
+    ctrl.throttle = 1.0f; // full throttle
+    fl::PayloadEffect px{};
+
+    for (int i = 0; i < 300; ++i) // 5 simulated seconds
+        fi.step(1.f / 60.f, ctrl, px, {}, /*groundElev=*/100.f);
+
+    CHECK(fi.state().vel_body[0] > 1.0f);
+}
+
 TEST_CASE("FlightIntegrator: nonzero world wind affects forces", "[flight_integrator][weather]") {
     // Use the parsed test model (mass=10000 kg) rather than BuiltinFlightModel (fuel=10M kg)
     // so the wind drag force produces a float-distinguishable velocity difference.

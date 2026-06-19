@@ -2,6 +2,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "render/BuiltinGeometry.h"
 #include "render/CameraController.h"
 #include "render/RenderSnapshot.h"
 #include "render/SceneRenderer.h"
@@ -15,6 +16,7 @@
 #include "mock_hal.h"
 
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
@@ -92,21 +94,12 @@ static EntityRenderEntry makeEntry(uint32_t typeIndex = 0, glm::dvec3 pos = {}) 
 // CameraController — Free mode
 // ---------------------------------------------------------------------------
 
-TEST_CASE("CameraController defaults to Free mode") {
+TEST_CASE("CameraController defaults to Cockpit mode") {
     CameraController cam;
-    CHECK(cam.mode() == CameraMode::Free);
+    CHECK(cam.mode() == CameraMode::Cockpit);
 }
 
-TEST_CASE("CameraController Free mode worldOrigin is nonzero at default distance") {
-    CameraController cam;
-    CameraView cv = cam.view(16.0f / 9.0f);
-    // Default distance=50m, pitch=20 deg: camera should not be at origin.
-    double len = std::sqrt(cv.worldOrigin.x * cv.worldOrigin.x + cv.worldOrigin.y * cv.worldOrigin.y +
-                           cv.worldOrigin.z * cv.worldOrigin.z);
-    CHECK(len > 1.0f);
-}
-
-TEST_CASE("CameraController Free mode projection encodes near plane in proj[3][2]") {
+TEST_CASE("CameraController projection encodes near plane in proj[3][2]") {
     CameraController cam;
     float near = 0.5f;
     CameraView cv = cam.view(1.0f, 1.0472f, near);
@@ -114,27 +107,35 @@ TEST_CASE("CameraController Free mode projection encodes near plane in proj[3][2
     CHECK(cv.proj[3][2] == Catch::Approx(near));
 }
 
-TEST_CASE("CameraController Free mode projection flips Y for Vulkan") {
+TEST_CASE("CameraController projection flips Y for Vulkan") {
     CameraController cam;
     CameraView cv = cam.view(1.0f);
     // proj[1][1] is negative (Vulkan Y-flip).
     CHECK(cv.proj[1][1] < 0.0f);
 }
 
-TEST_CASE("CameraController Free mode proj[2][3] is -1 for RH perspective") {
+TEST_CASE("CameraController proj[2][3] is -1 for RH perspective") {
     CameraController cam;
     CameraView cv = cam.view(1.0f);
     CHECK(cv.proj[2][3] == Catch::Approx(-1.0f));
 }
 
-TEST_CASE("CameraController setFreeOrbit repositions camera") {
+TEST_CASE("CameraController setPose sets worldOrigin to the eye") {
     CameraController cam;
-    cam.setFreeOrbit({0, 0, 0}, 0.0f, 0.0f, 10.0f);
+    cam.setPose(glm::dvec3{100.0, 200.0, 300.0}, glm::vec3{1.f, 0.f, 0.f}, glm::vec3{0.f, 1.f, 0.f});
+    CameraView cv = cam.view(16.0f / 9.0f);
+    CHECK(cv.worldOrigin.x == Catch::Approx(100.0).margin(1e-4));
+    CHECK(cv.worldOrigin.y == Catch::Approx(200.0).margin(1e-4));
+    CHECK(cv.worldOrigin.z == Catch::Approx(300.0).margin(1e-4));
+}
+
+TEST_CASE("CameraController setPose orients the view along forward") {
+    CameraController cam;
+    // Look along world +X: glm::lookAt stores -forward at view[0][2], so it should be -1.
+    cam.setPose(glm::dvec3(0), glm::vec3{1.f, 0.f, 0.f}, glm::vec3{0.f, 1.f, 0.f});
     CameraView cv = cam.view(1.0f);
-    // yaw=0, pitch=0, dist=10 => cam at (0, 0, 10).
-    CHECK(cv.worldOrigin.x == Catch::Approx(0.0).margin(1e-4));
-    CHECK(cv.worldOrigin.y == Catch::Approx(0.0).margin(1e-4));
-    CHECK(cv.worldOrigin.z == Catch::Approx(10.0).margin(1e-3));
+    CHECK(cv.proj[2][3] == Catch::Approx(-1.0f)); // RH perspective preserved
+    CHECK(cv.view[0][2] == Catch::Approx(-1.0f).margin(1e-4f));
 }
 
 TEST_CASE("CameraController setMode changes mode") {
@@ -147,58 +148,10 @@ TEST_CASE("CameraController setMode changes mode") {
     CHECK(cam.mode() == CameraMode::Free);
 }
 
-TEST_CASE("CameraController Chase mode orbit positions camera away from pivot") {
+TEST_CASE("CameraController view guards against forward parallel to up") {
     CameraController cam;
-    cam.setMode(CameraMode::Chase);
-    glm::dvec3 entityPos{100.0, 50.0, 200.0};
-    cam.setFreeOrbit(entityPos, 0.f, 0.f, 25.f);
-    CameraView cv = cam.view(16.0f / 9.0f);
-    double dx = cv.worldOrigin.x - entityPos.x;
-    double dy = cv.worldOrigin.y - entityPos.y;
-    double dz = cv.worldOrigin.z - entityPos.z;
-    double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-    CHECK(dist == Catch::Approx(25.0).margin(0.1));
-}
-
-TEST_CASE("CameraController Cockpit mode worldOrigin matches target position") {
-    CameraController cam;
-    cam.setMode(CameraMode::Cockpit);
-    cam.setTarget(glm::dvec3{100.0, 200.0, 300.0}, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
-    CameraView cv = cam.view(16.0f / 9.0f);
-    CHECK(cv.worldOrigin.x == Catch::Approx(100.0).margin(1e-4));
-    CHECK(cv.worldOrigin.y == Catch::Approx(200.0).margin(1e-4));
-    CHECK(cv.worldOrigin.z == Catch::Approx(300.0).margin(1e-4));
-}
-
-TEST_CASE("CameraController Cockpit mode look offset affects view direction") {
-    CameraController cam;
-    cam.setMode(CameraMode::Cockpit);
-    cam.setTarget(glm::dvec3(0), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
-    CameraView cvForward = cam.view(1.0f);
-    cam.setCockpitLook(90.f, 0.f); // look right 90 degrees
-    CameraView cvRight = cam.view(1.0f);
-    // Camera Z-axis in world (view column 2) should differ after the look offset
-    CHECK(cvForward.view[2][2] != Catch::Approx(cvRight.view[2][2]).margin(0.1f));
-}
-
-TEST_CASE("CameraController Cockpit default look direction encodes entity forward") {
-    CameraController cam;
-    cam.setMode(CameraMode::Cockpit);
-    cam.setTarget(glm::dvec3(0), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
-    CameraView cv = cam.view(1.0f);
-    CHECK(cv.proj[2][3] == Catch::Approx(-1.0f)); // RH perspective preserved
-    // Entity forward convention: body +X. With identity quat, camera looks along world +X.
-    // The view matrix back-vector (-forward) is world -X, stored in view[col=0][row=2].
-    CHECK(cv.view[0][2] == Catch::Approx(-1.0f).margin(1e-4f)); // camera looks along world +X
-}
-
-TEST_CASE("CameraController Cockpit gimbal lock guard prevents NaN") {
-    CameraController cam;
-    cam.setMode(CameraMode::Cockpit);
-    // Entity pointing straight up (90-degree pitch, forward = world +Y)
-    glm::quat straight_up = glm::angleAxis(glm::radians(-90.f), glm::vec3{1.0f, 0.0f, 0.0f});
-    cam.setTarget(glm::dvec3(0), straight_up);
-    cam.setCockpitLook(0.f, 0.f);
+    // Forward straight up with up also +Y: the guard must substitute a non-parallel up (no NaN).
+    cam.setPose(glm::dvec3(0), glm::vec3{0.f, 1.f, 0.f}, glm::vec3{0.f, 1.f, 0.f});
     CameraView cv = cam.view(1.0f);
     CHECK(!std::isnan(cv.view[0][0]));
     CHECK(!std::isnan(cv.view[1][1]));
@@ -583,6 +536,59 @@ TEST_CASE("SceneRenderer falls back to builtin palette when resolver returns fal
     CHECK(renderer.lastScene.renderItems[0].material.valid());
 }
 
+TEST_CASE("SceneRenderer marks the hidden entity shadow-only (cockpit ownship)") {
+    MockLogger logger;
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    AssetManager assets{std::move(packs), logger};
+    assets.initialize(nullptr);
+
+    MockRenderer renderer;
+    SimRenderBridge bridge;
+    SceneRenderer sr{bridge, noTypes(), assets, renderer};
+
+    EntityRenderEntry self = makeEntry(0);
+    self.entityIdx = 0;
+    self.entityGen = 1;
+    EntityRenderEntry other = makeEntry(0, {100.0, 0.0, 0.0});
+    other.entityIdx = 1;
+    other.entityGen = 1;
+
+    auto publishBoth = [&]() {
+        RenderSnapshot snap = makeSnap();
+        snap.entries.push_back(self);
+        snap.entries.push_back(other);
+        bridge.publish(std::move(snap));
+    };
+    auto shadowOnlyCount = [&]() {
+        int n = 0;
+        for (const auto& it : renderer.lastScene.renderItems)
+            if (it.flags & kRenderFlagShadowOnly)
+                ++n;
+        return n;
+    };
+
+    // Hide the player's own entity (idx 0, gen 1): it is still submitted (so it casts a shadow)
+    // but flagged shadow-only; the other entity renders normally.
+    publishBoth();
+    sr.setHiddenEntity(0, 1);
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    REQUIRE(renderer.lastScene.renderItems.size() == 2);
+    CHECK(shadowOnlyCount() == 1);
+
+    // gen == 0 disables the filter: both entities render normally.
+    publishBoth();
+    sr.setHiddenEntity(0, 0);
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    REQUIRE(renderer.lastScene.renderItems.size() == 2);
+    CHECK(shadowOnlyCount() == 0);
+
+    // A non-matching generation does not hide the entity (stale-id guard).
+    publishBoth();
+    sr.setHiddenEntity(0, 99);
+    sr.renderFrame(0.0f, CameraView{}, EnvironmentState{});
+    CHECK(shadowOnlyCount() == 0);
+}
+
 TEST_CASE("SceneRenderer assigns distinct palette materials by entityIdx") {
     MockLogger logger;
     std::vector<std::unique_ptr<IContentPack>> packs;
@@ -679,4 +685,114 @@ TEST_CASE("SceneRenderer builtin floor camera-relative offset uses dvec3 worldOr
     const glm::vec4& ft = items.back().transform[3];
     CHECK(ft.x == Catch::Approx(-50.0f).margin(1e-4f));
     CHECK(ft.z == Catch::Approx(-75.0f).margin(1e-4f));
+}
+
+// ---------------------------------------------------------------------------
+// Builtin tetrahedron winding / normals
+// ---------------------------------------------------------------------------
+
+// The builtin entity tetrahedron must have outward-facing normals (CCW winding when
+// viewed from outside). With inward normals the opaque pipeline (frontFace=CW after the
+// Vulkan Y-flip, cull BACK) renders the mesh inside-out: visible from every camera angle
+// and, critically, NOT culled in cockpit view where the camera sits at the centroid.
+// Regression guard for the inverted-winding bug.
+TEST_CASE("Builtin tetrahedron has outward-facing normals") {
+    const std::span<const uint8_t> glb = builtinTetrahedronGlb();
+    REQUIRE(glb.size() > 20u);
+
+    auto readU32 = [&](std::size_t off) {
+        uint32_t v = 0;
+        std::memcpy(&v, glb.data() + off, 4);
+        return v;
+    };
+    // GLB: 12-byte header, then JSON chunk (4-byte len + 4-byte type "JSON" + data),
+    // then BIN chunk (4-byte len + 4-byte type "BIN\0" + data).
+    const uint32_t jsonLen = readU32(12);
+    const std::size_t binStart = 12u + 8u + jsonLen + 8u;
+    REQUIRE(glb.size() >= binStart + 12u * 12u * 2u);
+
+    // Non-interleaved layout: 12 POSITION vec3 (144 B) then 12 NORMAL vec3 (144 B).
+    auto readVec3 = [&](std::size_t off) {
+        float x, y, z;
+        std::memcpy(&x, glb.data() + off + 0, 4);
+        std::memcpy(&y, glb.data() + off + 4, 4);
+        std::memcpy(&z, glb.data() + off + 8, 4);
+        return glm::vec3{x, y, z};
+    };
+
+    constexpr int kVerts = 12;
+    const std::size_t normBase = binStart + static_cast<std::size_t>(kVerts) * 12u;
+
+    // The mesh origin is the ground-contact point, not the centroid, so compute the centroid
+    // (mean of the 12 vertices) and check each normal points away from it (outward).
+    glm::vec3 centroid{0.f};
+    for (int i = 0; i < kVerts; ++i)
+        centroid += readVec3(binStart + static_cast<std::size_t>(i) * 12u);
+    centroid /= static_cast<float>(kVerts);
+
+    for (int i = 0; i < kVerts; ++i) {
+        const glm::vec3 pos = readVec3(binStart + static_cast<std::size_t>(i) * 12u);
+        const glm::vec3 nrm = readVec3(normBase + static_cast<std::size_t>(i) * 12u);
+        // An outward normal points away from the centroid: dot(normal, pos - centroid) > 0.
+        CHECK(glm::dot(nrm, pos - centroid) > 0.0f);
+    }
+
+    // Standard glTF winding (CCW-from-outside): each face's winding cross-product must AGREE with
+    // its outward stored normal (dot > 0). The engine front-faces this (frontFace=CCW). A negative
+    // dot means the mesh is wound inside-out (back faces shown, front faces culled).
+    for (int f = 0; f < kVerts / 3; ++f) {
+        const glm::vec3 v0 = readVec3(binStart + static_cast<std::size_t>(f * 3 + 0) * 12u);
+        const glm::vec3 v1 = readVec3(binStart + static_cast<std::size_t>(f * 3 + 1) * 12u);
+        const glm::vec3 v2 = readVec3(binStart + static_cast<std::size_t>(f * 3 + 2) * 12u);
+        const glm::vec3 storedNormal = readVec3(normBase + static_cast<std::size_t>(f * 3) * 12u);
+        const glm::vec3 windingCross = glm::cross(v1 - v0, v2 - v0);
+        CHECK(glm::dot(windingCross, storedNormal) > 0.0f);
+    }
+}
+
+// The builtin floor's triangles are wound CCW-from-above (standard glTF) so the winding
+// cross-product agrees with the +Y stored normal; the engine front-faces this (frontFace=CCW),
+// rendering the top surface. Inverted winding would render the plane only from below. Regression
+// guard for the inside-out winding class of bug.
+TEST_CASE("Builtin floor plane is wound front-face up") {
+    const std::span<const uint8_t> glb = builtinFloorPlaneGlb();
+    REQUIRE(glb.size() > 20u);
+
+    auto readU32 = [&](std::size_t off) {
+        uint32_t v = 0;
+        std::memcpy(&v, glb.data() + off, 4);
+        return v;
+    };
+    auto readVec3 = [&](std::size_t off) {
+        float x, y, z;
+        std::memcpy(&x, glb.data() + off + 0, 4);
+        std::memcpy(&y, glb.data() + off + 4, 4);
+        std::memcpy(&z, glb.data() + off + 8, 4);
+        return glm::vec3{x, y, z};
+    };
+
+    // BIN layout (build_floor_plane): 4 POSITION vec3 (48 B), 4 NORMAL vec3 (48 B),
+    // then 6 uint16 indices.
+    const uint32_t jsonLen = readU32(12);
+    const std::size_t binStart = 12u + 8u + jsonLen + 8u;
+    constexpr int kVerts = 4;
+    const std::size_t idxBase = binStart + static_cast<std::size_t>(kVerts) * 12u * 2u;
+    REQUIRE(glb.size() >= idxBase + 6u * sizeof(uint16_t));
+
+    auto idx = [&](int i) {
+        uint16_t v = 0;
+        std::memcpy(&v, glb.data() + idxBase + static_cast<std::size_t>(i) * sizeof(uint16_t), sizeof(uint16_t));
+        return static_cast<std::size_t>(v);
+    };
+    const glm::vec3 a = readVec3(binStart + idx(0) * 12u);
+    const glm::vec3 b = readVec3(binStart + idx(1) * 12u);
+    const glm::vec3 c = readVec3(binStart + idx(2) * 12u);
+    // Winding cross-product of the first triangle points UP (+Y), agreeing with the stored
+    // normal (standard CCW-from-above) so the engine front-faces the top surface.
+    const glm::vec3 windingCross = glm::cross(b - a, c - a);
+    CHECK(windingCross.y > 0.0f);
+    // The stored NORMAL (first vertex) also points up (+Y) for lighting.
+    const std::size_t normBase = binStart + static_cast<std::size_t>(kVerts) * 12u;
+    const glm::vec3 storedNormal = readVec3(normBase);
+    CHECK(storedNormal.y > 0.0f);
 }

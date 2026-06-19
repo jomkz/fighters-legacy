@@ -3,16 +3,27 @@
 """
 Generate minimal glTF 2.0 binary (.glb) byte arrays for BuiltinGeometry.cpp.
 
-Outputs a C++ snippet with two static const uint8_t[] definitions:
-  kTetrahedronGlb — regular tetrahedron, ~10 m span, +X forward, per-face normals
-  kFloorPlaneGlb  — flat 4 km × 4 km quad at Y=0, normal (0,1,0)
+Default: prints a C++ snippet with static const uint8_t[] definitions:
+  kTetrahedronGlb — directional wedge (~10 m, +X forward), flat bottom/back, per-face normals
+  kFloorPlaneGlb  — flat 4 km x 4 km quad at Y=0, normal (0,1,0)
+  kTetrahedronFace{0..3}Glb — individual faces (validate-mesh _b-node convention)
 
-Run: python3 tools/gen_builtin_glb.py
+Run (regenerate C arrays):  python3 tools/gen_builtin_glb.py
+Run (export .glb files):    python3 tools/gen_builtin_glb.py --export-dir /tmp/builtin
+  Writes builtin_entity.glb + builtin_floor.glb for inspection in Blender
+  (File > Import > glTF 2.0). Use these to confirm the engine's winding /
+  normal convention matches Blender's glTF export (CCW front faces, +Y up).
+
+NOTE: this is a Python file -- do NOT run clang-format on it (it will mangle the
+comments and SPDX headers). After regenerating BuiltinGeometry.cpp, clang-format
+only that .cpp output, never this script.
 """
 
+import argparse
 import json
 import struct
 import math
+import os
 
 
 def pack_vec3(x, y, z):
@@ -57,30 +68,53 @@ def make_glb_full(bin_data: bytes, gltf_json: dict) -> bytes:
     return header + json_chunk_hdr + json_bytes + bin_chunk_hdr + bin_data_padded
 
 
+def tetra_vertices():
+    """
+    Directional wedge/dart placeholder, ~10 m long, pointing in +X (direction of travel).
+    Topologically a tetrahedron (4 vertices, 4 faces) oriented so it reads like a vehicle:
+      - FLAT BOTTOM on the ground   (the BL/BR/F triangle, all at y=0)
+      - FLAT VERTICAL BACK at -X     (the BL/BR/BT triangle, all at x=-d)
+      - single NOSE vertex F at +X   (the "front" / direction of travel)
+      - top slopes from the back-top (BT) down to the nose
+    Origin is the ground-contact point (lowest verts at y=0), the standard vehicle convention
+    (origin at the gear line) so the physics floor clamps the origin straight to the terrain.
+    Returns (BL, BR, BT, F).
+    """
+    d = 2.5  # back face plane at x = -d
+    L = 7.5  # nose at x = +L  (total length d + L = 10 m)
+    w = 2.5  # half-width (5 m span)
+    h = 3.0  # back-top height
+    BL = (-d, 0.0, -w)  # back-bottom-left
+    BR = (-d, 0.0, w)   # back-bottom-right
+    BT = (-d, h, 0.0)   # back-top
+    F = (L, 0.0, 0.0)   # front nose (ground level)
+    return BL, BR, BT, F
+
+
+def tetra_faces():
+    """4 faces wound CCW-from-outside (outward normals). See tetra_vertices() for the shape.
+
+    Outward normals are required by the engine's opaque pipeline (frontFace=CW after the Vulkan
+    Y-flip + cull BACK): the outside renders, the inside is culled. Face order matters because the
+    forward shader's debug face-colouring keys off the face normal:
+      0 bottom (-Y) = red, 1 back (-X) = green, 2 right (+Z) = blue, 3 left (-Z) = yellow.
+    """
+    BL, BR, BT, F = tetra_vertices()
+    return [
+        (BL, F, BR),   # 0 bottom -> outward normal -Y
+        (BL, BR, BT),  # 1 back   -> outward normal -X
+        (BR, F, BT),   # 2 right  -> outward normal +Z (up/forward)
+        (BL, BT, F),   # 3 left   -> outward normal -Z (up/forward)
+    ]
+
+
 def build_tetrahedron() -> bytes:
     """
-    Regular tetrahedron, ~10 m span, pointing in +X direction.
+    Directional wedge placeholder (see tetra_vertices/tetra_faces), ~10 m long, +X forward.
     4 faces × 3 vertices = 12 vertices, each with POSITION (vec3) + NORMAL (vec3).
     Vertex stride = 24 bytes. Total binary = 12 * 24 = 288 bytes.
     Per-face normals (flat shading): each triangle has its own 3 identical normals.
     """
-    # Tetrahedron vertices in a coordinate system where the centroid is at origin,
-    # one vertex points along +X (forward), and the base triangle faces -X.
-    # Regular tetrahedron with circumradius R = 5.0 m (diameter ~10 m).
-    R = 5.0  # circumradius in metres
-
-    # Vertex positions of a regular tetrahedron inscribed in a sphere of radius R.
-    # Oriented so v0 is the "nose" pointing along +X.
-    # v0: front tip
-    # v1, v2, v3: rear base triangle (equilateral, rotated 120° around X axis)
-    v0 = (R, 0.0, 0.0)
-    base_r = R * math.sqrt(8.0/9.0)  # radius of base circle
-    base_x = -R / 3.0                # X position of base vertices
-    angle_offset = 0.0  # rotate base so one vertex is up (+Y)
-    v1 = (base_x,  base_r * math.cos(angle_offset + 0),              base_r * math.sin(angle_offset + 0))
-    v2 = (base_x,  base_r * math.cos(angle_offset + 2*math.pi/3),    base_r * math.sin(angle_offset + 2*math.pi/3))
-    v3 = (base_x,  base_r * math.cos(angle_offset + 4*math.pi/3),    base_r * math.sin(angle_offset + 4*math.pi/3))
-
     def norm(a, b, c):
         """Face normal from 3 vertices (a, b, c) — CCW winding."""
         ab = (b[0]-a[0], b[1]-a[1], b[2]-a[2])
@@ -91,24 +125,20 @@ def build_tetrahedron() -> bytes:
         length = math.sqrt(nx*nx + ny*ny + nz*nz)
         return (nx/length, ny/length, nz/length)
 
-    # 4 faces with CCW winding when viewed from outside (glTF convention).
-    # Swapping the last two vertices of the naive ordering corrects the cross-product
-    # direction to point outward from the centroid at the origin.
-    faces = [
-        (v0, v2, v1),
-        (v0, v3, v2),
-        (v0, v1, v3),
-        (v1, v2, v3),  # base, outward normal = -X direction
-    ]
+    faces = tetra_faces()
 
     pos_bin = b''
     norm_bin = b''
     pos_min = [float('inf')] * 3
     pos_max = [float('-inf')] * 3
 
+    # tetra_faces() lists each face CCW-from-outside (the glTF 2.0 standard, what Blender exports):
+    # norm(a,b,c) is the OUTWARD normal and the winding cross-product agrees with it. The engine's
+    # opaque pipeline front-faces standard CCW geometry (frontFace=CCW + the projection Y-flip), so
+    # this renders solid from outside.
     for face in faces:
         a, b, c = face
-        n = norm(a, b, c)
+        n = norm(a, b, c)  # outward normal (== winding cross-product direction)
         for v in (a, b, c):
             pos_bin += pack_vec3(*v)
             norm_bin += pack_vec3(*n)
@@ -127,7 +157,7 @@ def build_tetrahedron() -> bytes:
         "asset": {"version": "2.0"},
         "scene": 0,
         "scenes": [{"nodes": [0]}],
-        "nodes": [{"mesh": 0}],
+        "nodes": [{"name": "builtin_entity", "mesh": 0}],
         "meshes": [{
             "name": "builtin_entity",
             "primitives": [{
@@ -179,9 +209,10 @@ def build_floor_plane() -> bytes:
     ]
     normal = (0.0, 1.0, 0.0)
 
-    # 2 triangles (CCW from above):  v0,v2,v1 and v0,v3,v2
-    # Indices as uint16
-    indices = [0, 2, 1, 0, 3, 2]
+    # 2 triangles wound CCW when viewed from above (glTF standard), so the winding cross-product
+    # agrees with the stored +Y normal; the engine front-faces this (frontFace=CCW + projection
+    # Y-flip), rendering the top surface.
+    indices = [0, 1, 2, 0, 2, 3]
 
     # Build binary: positions then normals then indices
     pos_bin = b''
@@ -207,7 +238,7 @@ def build_floor_plane() -> bytes:
         "asset": {"version": "2.0"},
         "scene": 0,
         "scenes": [{"nodes": [0]}],
-        "nodes": [{"mesh": 0}],
+        "nodes": [{"name": "builtin_floor", "mesh": 0}],
         "meshes": [{
             "name": "builtin_floor",
             "primitives": [{
@@ -265,7 +296,7 @@ def build_tetrahedron_face(vertices) -> bytes:
 
     ab = (b[0]-a[0], b[1]-a[1], b[2]-a[2])
     ac = (c[0]-a[0], c[1]-a[1], c[2]-a[2])
-    n = norm3(cross3(ab, ac))
+    n = norm3(cross3(ab, ac))  # outward normal (winding cross-product, standard CCW)
 
     pos_bin = pack_vec3(*a) + pack_vec3(*b) + pack_vec3(*c)
     norm_bin = pack_vec3(*n) * 3
@@ -280,8 +311,9 @@ def build_tetrahedron_face(vertices) -> bytes:
         "asset": {"version": "2.0"},
         "scene": 0,
         "scenes": [{"nodes": [0]}],
-        "nodes": [{"mesh": 0}],
-        "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "mode": 4}]}],
+        "nodes": [{"name": "builtin_entity_face", "mesh": 0}],
+        "meshes": [{"name": "builtin_entity_face",
+                    "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "mode": 4}]}],
         "accessors": [
             {"bufferView": 0, "byteOffset": 0, "componentType": 5126, "count": 3,
              "type": "VEC3",
@@ -311,18 +343,28 @@ def bytes_to_cpp_array(name: str, data: bytes) -> str:
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Generate builtin glTF geometry.")
+    parser.add_argument(
+        "--export-dir",
+        metavar="DIR",
+        help="Write builtin_entity.glb and builtin_floor.glb to DIR (for Blender import / "
+             "winding inspection) instead of printing the C++ arrays.")
+    args = parser.parse_args()
+
     tet = build_tetrahedron()
     floor = build_floor_plane()
 
-    # Compute the 4 CCW-wound faces (same geometry as build_tetrahedron).
-    R = 5.0
-    base_r = R * math.sqrt(8.0 / 9.0)
-    base_x = -R / 3.0
-    v0 = (R, 0.0, 0.0)
-    v1 = (base_x, base_r * math.cos(0),              base_r * math.sin(0))
-    v2 = (base_x, base_r * math.cos(2*math.pi/3),    base_r * math.sin(2*math.pi/3))
-    v3 = (base_x, base_r * math.cos(4*math.pi/3),    base_r * math.sin(4*math.pi/3))
-    faces = [(v0, v2, v1), (v0, v3, v2), (v0, v1, v3), (v1, v2, v3)]
+    if args.export_dir:
+        os.makedirs(args.export_dir, exist_ok=True)
+        for name, data in (("builtin_entity.glb", tet), ("builtin_floor.glb", floor)):
+            path = os.path.join(args.export_dir, name)
+            with open(path, "wb") as f:
+                f.write(data)
+            print(f"wrote {path} ({len(data)} bytes)")
+        return
+
+    # Compute the 4 faces (same geometry/winding as build_tetrahedron: origin at the flat bottom).
+    faces = tetra_faces()
 
     print(f'// kTetrahedronGlb: {len(tet)} bytes')
     print(bytes_to_cpp_array('kTetrahedronGlb', tet))

@@ -324,6 +324,7 @@ std::vector<RenderItem> TerrainStreamer::getRenderItems(glm::dvec3 worldOrigin) 
             item.mesh = best->mesh;
             item.material = m_terrainMat;
             item.transform = glm::translate(glm::mat4(1.0f), relOrigin);
+            item.flags = kRenderFlagTerrain; // forward pass applies elevation/slope shading
             items.push_back(item);
         }
     }
@@ -377,6 +378,21 @@ double TerrainStreamer::heightAt(double x, double z) const noexcept {
     elevation += std::sqrt(std::max(0.0, R * R - D2)) - R;
 
     return elevation;
+}
+
+bool TerrainStreamer::heightReadyAt(double x, double z) const noexcept {
+    std::shared_lock lock(m_chunkMutex);
+
+    const int cx = static_cast<int>(std::floor((x - m_manifest.originX) / m_manifest.chunkSizeM));
+    const int cy = static_cast<int>(std::floor((z - m_manifest.originZ) / m_manifest.chunkSizeM));
+
+    ChunkKey key;
+    key.cx = cx;
+    key.cy = cy;
+    key.lod = 0u;
+
+    auto it = m_chunks.find(key);
+    return it != m_chunks.end() && it->second.state == ChunkState::Ready;
 }
 
 uint8_t TerrainStreamer::surfaceAt(double /*x*/, double /*z*/) const noexcept {

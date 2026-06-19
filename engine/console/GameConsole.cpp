@@ -188,21 +188,16 @@ bool GameConsole::pushRect(float x0, float y0, float x1, float y1, float r, floa
 // buildHud
 // ---------------------------------------------------------------------------
 
-void GameConsole::buildHud(const glm::dvec3* camPos, const glm::dvec3* playerPos) {
+void GameConsole::buildHud(const glm::dvec3* playerPos) {
     m_elemCount = 0;
     m_strCount = 0;
 
-    // Camera position -- always visible when supplied; 2x scale for readability
-    if (camPos) {
-        pushText(kPosX, kPosY, 1.0f, 0.2f, 0.2f, "CAM %+.0f %+.0f %+.0f", static_cast<float>(camPos->x),
-                 static_cast<float>(camPos->y), static_cast<float>(camPos->z));
-        m_elems[m_elemCount - 1].scale = 2.0f;
-    }
-
-    // Entity position -- 3x line-step below to clear the 2x cam text
+    // Entity position widget (toggle_pos). Camera/entity debug readouts now live in the F3
+    // performance overlay (PerformanceOverlay::setSceneInfo), so this widget shows only the
+    // player entity world coords when explicitly toggled on.
     if (m_showPos && playerPos) {
-        pushText(kPosX, kPosY + kLineStep * 3.0f, 0.0f, 0.7f, 0.0f, "ENT %+.0f %+.0f %+.0f",
-                 static_cast<float>(playerPos->x), static_cast<float>(playerPos->y), static_cast<float>(playerPos->z));
+        pushText(kPosX, kPosY, 0.0f, 0.7f, 0.0f, "ENT %+.0f %+.0f %+.0f", static_cast<float>(playerPos->x),
+                 static_cast<float>(playerPos->y), static_cast<float>(playerPos->z));
     }
 
     if (!m_open)

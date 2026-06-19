@@ -107,7 +107,8 @@ std::vector<uint8_t> buildTerrainMeshGlb(const std::vector<uint16_t>& heights, i
         }
     }
 
-    // Build index array (CCW winding from above)
+    // Build index array. Standard glTF winding: CCW-from-above so the winding cross-product
+    // agrees with the +Y stored normal (front-faces the top surface under frontFace=CCW).
     std::vector<uint16_t> indices(static_cast<std::size_t>(indexCount));
     std::size_t ii = 0;
     for (int row = 0; row < meshGrid; ++row) {
@@ -116,14 +117,14 @@ std::vector<uint8_t> buildTerrainMeshGlb(const std::vector<uint16_t>& heights, i
             const uint16_t vr = static_cast<uint16_t>(v + 1);
             const uint16_t vd = static_cast<uint16_t>(v + gridPts);
             const uint16_t vdr = static_cast<uint16_t>(v + gridPts + 1);
-            // tri 0: v, vdr, vd
+            // tri 0: v, vd, vdr
             indices[ii++] = v;
-            indices[ii++] = vdr;
             indices[ii++] = vd;
-            // tri 1: v, vr, vdr
-            indices[ii++] = v;
-            indices[ii++] = vr;
             indices[ii++] = vdr;
+            // tri 1: v, vdr, vr
+            indices[ii++] = v;
+            indices[ii++] = vdr;
+            indices[ii++] = vr;
         }
     }
 

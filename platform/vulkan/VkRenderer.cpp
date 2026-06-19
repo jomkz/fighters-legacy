@@ -661,7 +661,9 @@ void VkRenderer::computeCascades(const FrameScene& scene, ShadowUBO& out) {
         const float ndcZNear = (nearDist > 0.001f) ? glm::clamp(nearVal / nearDist, 0.0f, 1.0f) : 1.0f;
         const float ndcZFar = (farDist > 0.001f) ? glm::clamp(nearVal / farDist, 0.0f, 1.0f) : 0.0f;
 
-        // Unproject 8 frustum corners → camera-relative world space → absolute.
+        // Unproject 8 frustum corners → camera-relative world space. The cascade (and thus
+        // lightViewProj) is kept camera-relative to match the camera-relative geometry uploaded
+        // to both the shadow and forward passes — no worldOrigin offset.
         glm::vec3 corners[8];
         int idx = 0;
         for (float z : {ndcZNear, ndcZFar}) {
@@ -669,7 +671,7 @@ void VkRenderer::computeCascades(const FrameScene& scene, ShadowUBO& out) {
                 for (float y : {-1.0f, 1.0f}) {
                     glm::vec4 ndc(x, y, z, 1.0f);
                     glm::vec4 world = invVP * ndc;
-                    corners[idx++] = glm::vec3(world / world.w) + glm::vec3(scene.camera.worldOrigin);
+                    corners[idx++] = glm::vec3(world / world.w);
                 }
             }
         }
@@ -1692,7 +1694,9 @@ bool VkRenderer::createForwardPipeline() {
     rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    // Standard glTF winding: triangles are CCW-from-outside. With the projection's Y-flip
+    // (proj[1][1] = -f) the screen-space winding is preserved as CCW, so front faces are CCW.
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
@@ -1832,8 +1836,8 @@ bool VkRenderer::createForwardAlphaPipeline() {
     VkPipelineRasterizationStateCreateInfo rasterizer{};
     rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterizer.cullMode = VK_CULL_MODE_NONE; // transparent surfaces rendered from both sides
-    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;                // transparent surfaces rendered from both sides
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; // match opaque (no cull, kept consistent)
     rasterizer.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
@@ -2056,7 +2060,9 @@ bool VkRenderer::createShadowPipeline() {
     rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizer.cullMode = VK_CULL_MODE_FRONT_BIT; // front-face culling reduces peter-panning
-    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    // Must match the opaque pass's front-face definition so "cull front" culls the same
+    // (light-facing) side; the shadow light projection also applies the Y-flip.
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
@@ -3347,6 +3353,8 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 
         // Draw each submitted RenderItem.
         for (const auto& item : m_pendingScene.renderItems) {
+            if (item.flags & kRenderFlagShadowOnly)
+                continue; // rendered into the shadow map only, not the color pass
             const GpuMesh* mesh = m_resources.getMesh(item.mesh);
             if (!mesh)
                 continue;
@@ -3366,6 +3374,9 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
             pc.baseColorFactor = mat ? mat->baseColorFactor : glm::vec4(1.0f);
             pc.metallicFactor = mat ? mat->metallicFactor : 0.0f;
             pc.roughnessFactor = mat ? mat->roughnessFactor : 1.0f;
+            pc.shadingMode = (item.flags & kRenderFlagTerrain)          ? 1.0f
+                             : (item.flags & kRenderFlagDebugFaceColor) ? 2.0f
+                                                                        : 0.0f;
             vkCmdPushConstants(cmd, m_forwardLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                sizeof(pc), &pc);
 
@@ -3445,10 +3456,12 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 
     // ── Transparent pass — alpha-blended items sorted back-to-front ───────
     {
-        // Collect transparent render items (material.alphaBlend == true).
+        // Collect transparent render items (material.alphaBlend == true), excluding shadow-only.
         std::vector<uint32_t> transIndices;
         const auto& items = m_pendingScene.renderItems;
         for (uint32_t i = 0; i < static_cast<uint32_t>(items.size()); ++i) {
+            if (items[i].flags & kRenderFlagShadowOnly)
+                continue;
             const GpuMaterial* mat = m_resources.getMaterial(items[i].material);
             if (mat && mat->alphaBlend)
                 transIndices.push_back(i);
@@ -3511,6 +3524,9 @@ void VkRenderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
                 pc.baseColorFactor = mat ? mat->baseColorFactor : glm::vec4(1.0f);
                 pc.metallicFactor = mat ? mat->metallicFactor : 0.0f;
                 pc.roughnessFactor = mat ? mat->roughnessFactor : 1.0f;
+                pc.shadingMode = (item.flags & kRenderFlagTerrain)          ? 1.0f
+                                 : (item.flags & kRenderFlagDebugFaceColor) ? 2.0f
+                                                                            : 0.0f;
                 vkCmdPushConstants(cmd, m_forwardLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                    sizeof(pc), &pc);
                 const VkDeviceSize offset = 0;

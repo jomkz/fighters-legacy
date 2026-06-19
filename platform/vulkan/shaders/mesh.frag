@@ -38,7 +38,33 @@ layout(push_constant) uniform PushConstants {
     vec4  baseColorFactor;
     float metallicFactor;
     float roughnessFactor;
+    float shadingMode; // 0 = normal PBR, 1 = terrain elevation/slope, 2 = debug face colour
 } push;
+
+// Debug per-face colour for the builtin placeholder wedge, keyed off the (flat) face normal so
+// each face reads as a distinct colour and the orientation is unambiguous: bottom (-Y) = red,
+// back (-X) = green, right (+Z) = blue, left (-Z) = yellow.
+vec3 faceColor(vec3 n) {
+    if (n.y < -0.5) return vec3(0.85, 0.10, 0.10); // bottom
+    if (n.x < -0.5) return vec3(0.10, 0.70, 0.15); // back
+    if (n.z > 0.0)  return vec3(0.15, 0.35, 0.90); // right (+Z)
+    return vec3(0.90, 0.80, 0.10);                 // left (-Z)
+}
+
+// Elevation/slope terrain albedo: greener lowlands, earthy mid, rocky highs, with steep
+// faces blended toward bare rock. Gives the otherwise-flat-shaded terrain visible relief.
+vec3 terrainAlbedo(float elevationM, vec3 geoNormal) {
+    float e = clamp((elevationM - 500.0) / 200.0, 0.0, 1.0); // ~500 m..700 m across the relief
+    const vec3 lowCol  = vec3(0.28, 0.42, 0.18); // grassy lowland
+    const vec3 midCol  = vec3(0.46, 0.39, 0.24); // earthy brown
+    const vec3 highCol = vec3(0.60, 0.60, 0.62); // rocky/snowy high ground
+    vec3 col = (e < 0.5) ? mix(lowCol, midCol, e * 2.0)
+                         : mix(midCol, highCol, (e - 0.5) * 2.0);
+    // Slope: N.y near 1 = flat, lower = steep. Steep faces show bare rock.
+    float slope = clamp(geoNormal.y, 0.0, 1.0);
+    float rock  = 1.0 - smoothstep(0.55, 0.88, slope);
+    return mix(col, vec3(0.34, 0.32, 0.30), rock);
+}
 
 // ── Vertex inputs ────────────────────────────────────────────────────────────
 
@@ -90,9 +116,9 @@ float sampleShadow(vec3 camRelWorldPos, float viewDepth) {
     // kShadowFar so they never trigger the above branches when numCascades < 4.
     cascade = min(cascade, shadow.numCascades - 1u);
 
-    // lightViewProj was built for absolute world space.
-    vec3 absPos   = camRelWorldPos + camera.worldOrigin.xyz;
-    vec4 lightClip = shadow.lightViewProj[cascade] * vec4(absPos, 1.0);
+    // lightViewProj is built in camera-relative space (same rebase as the geometry), so the
+    // camera-relative fragment position is fed directly — no worldOrigin reconstruction.
+    vec4 lightClip = shadow.lightViewProj[cascade] * vec4(camRelWorldPos, 1.0);
     vec3 sc        = lightClip.xyz / lightClip.w;
 
     // NDC [-1,1] xy → UV [0,1]; Z is already [0,1] (forward-Z shadow map).
@@ -111,6 +137,16 @@ float sampleShadow(vec3 camRelWorldPos, float viewDepth) {
 void main() {
     // Base color
     vec4 baseColor = texture(baseColorTex, fragUV) * push.baseColorFactor;
+
+    // Debug face colour (builtin placeholder) takes priority; otherwise terrain elevation/slope
+    // shading. fragWorldPos is camera-relative, so add the camera world Y to recover absolute
+    // elevation. Both use the geometric (flat) normal.
+    if (push.shadingMode > 1.5) {
+        baseColor.rgb = faceColor(normalize(fragWorldNormal));
+    } else if (push.shadingMode > 0.5) {
+        float elevationM = fragWorldPos.y + camera.worldOrigin.y;
+        baseColor.rgb = terrainAlbedo(elevationM, normalize(fragWorldNormal));
+    }
 
     // ORM: R=occlusion, G=roughness, B=metallic
     vec3  orm       = texture(ormTex, fragUV).rgb;

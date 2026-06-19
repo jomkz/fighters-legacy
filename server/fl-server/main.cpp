@@ -232,12 +232,13 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    {
-        char buf[192];
-        std::snprintf(buf, sizeof(buf), "listening on %s:%u (max %d peers) name=\"%s\"", cfg.bindAddress.c_str(),
-                      cfg.port, cfg.maxPeers, cfg.name.c_str());
-        log->log(LogLevel::Info, __FILE__, __LINE__, buf);
-    }
+    // "listening on" is printed after startup is complete (after primeSpawnHeight and all
+    // pre-loop setup), so LocalServer::start() and CI smoke tests that wait for this line
+    // only proceed once ENet is actually being serviced by the game loop.
+    // Stored here for use after pre-loop setup completes (see below).
+    char listeningMsg[192];
+    std::snprintf(listeningMsg, sizeof(listeningMsg), "listening on %s:%u (max %d peers) name=\"%s\"",
+                  cfg.bindAddress.c_str(), cfg.port, cfg.maxPeers, cfg.name.c_str());
 
     if (cfg.incomingBandwidthBps || cfg.outgoingBandwidthBps) {
         static_cast<ENetNetwork*>(net)->setBandwidthLimit(cfg.incomingBandwidthBps, cfg.outgoingBandwidthBps);
@@ -307,11 +308,13 @@ int main(int argc, char** argv) {
     fl::TerrainStreamer terrainStreamer(fl::builtinWorldTerrainManifest(), assets, *p.asyncFilesystem, nullptr);
     log->log(LogLevel::Info, __FILE__, __LINE__, "terrain: headless streamer initialized");
 
-    // Prime the LOD-0 chunk at the origin so heightAt() returns real values for entity spawn.
-    // Procedural chunks are generated synchronously inside update() when no content pack is present.
+    // Kick off terrain streaming at the origin. A single update() is not enough to guarantee the
+    // exact spawn chunk is Ready (procedural loads are rate-limited to 8 chunks/frame and iterate an
+    // unordered set; content-pack chunks load asynchronously), so spawn elevations are primed below
+    // via primeSpawnHeight() before they are queried.
     terrainStreamer.update(glm::dvec3(0.0, 0.0, 0.0));
 
-    // ---- Entity system + sandbox entities ----
+    // ---- Entity system ----
     fl::EntityTypeRegistry entityRegistry;
     fl::EntityManager entityManager(*log, entityRegistry);
 
@@ -321,33 +324,45 @@ int main(int argc, char** argv) {
     debugDef.category = fl::ObjectCategory::AirVehicle;
     debugDef.maxHp = 100.0f;
     entityRegistry.registerType(std::move(debugDef));
-
-    // Spawn 5 entities in V-formation at 500 m AGL.
-    constexpr double kSpawnAGL = 500.0;
-    using Slot = std::pair<float, float>;
-    const Slot kSlots[] = {{0.0f, 0.0f}, {-30.0f, -25.0f}, {30.0f, -25.0f}, {-60.0f, -50.0f}, {60.0f, -50.0f}};
-    for (auto [x, z] : kSlots) {
-        fl::EntityTransform t{};
-        t.pos[0] = x;
-        t.pos[1] = terrainStreamer.heightAt(x, z) + kSpawnAGL;
-        t.pos[2] = z;
-        entityManager.spawn("builtin:debug-entity", t);
-    }
+    // Entities are spawned on-demand by WorldBroadcaster::onConnect; none pre-spawned here.
 
     // ---- Pre-cache peer spawn-point elevations (main-thread only, before gameLoop.start()) ----
     // TerrainStreamer::heightAt() is not thread-safe; all queries must complete before the sim
-    // thread starts. Procedural terrain chunks are generated synchronously inside update();
-    // content-pack chunks may not be ready yet (heightAt returns 0 m — accepted as a fallback).
+    // thread starts.
+    // Pump terrain streaming until the LOD0 chunk covering (x, z) is Ready so heightAt() returns a
+    // real elevation rather than the 0.0 not-loaded sentinel. Bounded by a wall-clock deadline so a
+    // missing/stuck chunk can never hang startup. Without this the entity spawns at y~0 and the
+    // per-tick floor query snaps it up to the terrain surface once it streams in, which the client
+    // sees as the camera jumping from ~0 to terrain height a couple seconds after load-in.
+    auto primeSpawnHeight = [&](double x, double z) {
+        using namespace std::chrono;
+        const auto deadline = steady_clock::now() + seconds(5);
+        while (!terrainStreamer.heightReadyAt(x, z) && steady_clock::now() < deadline) {
+            terrainStreamer.update(glm::dvec3(x, 0.0, z));
+            p.asyncFilesystem->service();
+            if (!terrainStreamer.heightReadyAt(x, z))
+                std::this_thread::sleep_for(milliseconds(2));
+        }
+        if (!terrainStreamer.heightReadyAt(x, z))
+            log->log(LogLevel::Warn, __FILE__, __LINE__,
+                     "terrain: spawn-point chunk not ready within timeout; spawning at AGL only");
+    };
+
+    // Entity meshes are authored with their origin at the ground-contact point (see
+    // gen_builtin_glb.py), so the physics floor can clamp the origin straight to the terrain and
+    // the mesh sits ON the ground — no per-mesh clearance offset needed.
     std::vector<std::array<double, 3>> cachedSpawns;
     {
         const double agl = cfg.spawn.aglOffset;
         if (cfg.spawn.points.empty()) {
-            // Default: origin. Chunk already primed by terrainStreamer.update above.
-            cachedSpawns.push_back(std::array<double, 3>{0.0, terrainStreamer.heightAt(0.0, 0.0) + agl, 0.0});
+            // Default spawn: origin.
+            constexpr double kDefaultSpawnZ = 0.0;
+            primeSpawnHeight(0.0, kDefaultSpawnZ);
+            cachedSpawns.push_back(
+                std::array<double, 3>{0.0, terrainStreamer.heightAt(0.0, kDefaultSpawnZ) + agl, kDefaultSpawnZ});
         } else {
             for (const auto& pt : cfg.spawn.points) {
-                terrainStreamer.update(glm::dvec3(pt.x, 0.0, pt.z));
-                p.asyncFilesystem->service();
+                primeSpawnHeight(pt.x, pt.z);
                 const double y = terrainStreamer.heightAt(pt.x, pt.z) + agl;
                 cachedSpawns.push_back(std::array<double, 3>{pt.x, y, pt.z});
             }
@@ -379,6 +394,8 @@ int main(int argc, char** argv) {
         terrainStreamer.setPlanetRadius(cfg.planetRadiusM);
     }
     // Per-entity terrain height query: sim thread calls heightAt() (thread-safe via shared_mutex).
+    // The entity origin is the mesh's ground-contact point, so the floor clamps it directly to the
+    // terrain — the mesh then rests ON the ground.
     broadcaster.setGroundElevationQuery(
         [&terrainStreamer](double x, double z) { return static_cast<float>(terrainStreamer.heightAt(x, z)); });
     // Resolve EntityDef::flightModelId -> parsed FlightModelData on the spawn path. Loads the raw
@@ -403,6 +420,7 @@ int main(int argc, char** argv) {
     // Seed the physics floor from the already-primed TerrainStreamer at origin.
     // Used by FlightIntegrator::step for ground collision. Updated each frame below.
     // Peer spawn positions are set separately via setSpawnPoints() above.
+    primeSpawnHeight(0.0, 0.0); // no-op if already Ready (default-spawn path primed it above)
     broadcaster.setGroundElevation(static_cast<float>(terrainStreamer.heightAt(0.0, 0.0)));
     if (!cfg.banlistPath.empty()) {
         auto banned = loadIpListFile(cfg.banlistPath, log);
@@ -477,6 +495,10 @@ int main(int argc, char** argv) {
     adminCtx.env.startTime = std::chrono::steady_clock::now();
 
     // ---- Start sim loop ----
+    // Emit the "listening on" line now that pre-loop setup (including primeSpawnHeight) is done.
+    // LocalServer::start() waits for this line; emitting it here ensures ENet is serviced before
+    // the client attempts its first connection.
+    log->log(LogLevel::Info, __FILE__, __LINE__, listeningMsg);
     gameLoop.start();
 
     // ---- RCON server (optional TCP remote admin channel) ----
