@@ -7,6 +7,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **network**: Extensible TLV extension block support for wire messages (`WireCodec.h`):
+  `appendExt`, `appendExtRaw`, `findExt`, `readExtValue`; `ExtTag` registry in
+  `GameProtocol.h`; old receivers skip unknown extensions transparently (#347)
+- **network**: `MsgWorldSnapshot` carries `SnapshotPeerCount` TLV extension
+  (`ExtTag::SnapshotPeerCount = 0x0100`, `uint16_t`); readable on the client via
+  `ClientNetEventHandler::serverPeerCount()` (#347)
+
 ### Changed
 
 - **game**: `FlightInputCollector` reads `FireWeapon` and `Afterburner` gamepad bindings from

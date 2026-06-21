@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "net/GameProtocol.h"
+#include "net/WireCodec.h"
 #include "weather/WeatherTypes.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -300,4 +301,71 @@ TEST_CASE("GameProtocol: MsgAdminResponseChunk round-trip", "[game_protocol]") {
     CHECK(parsed.seqNum == 3u);
     CHECK(parsed.flags == fl::kChunkFlagEnd);
     CHECK(std::string(parsed.body) == "chunk body text");
+}
+
+TEST_CASE("WireCodec ext: full WorldSnapshot packet with SnapshotPeerCount extension", "[game_protocol]") {
+    // Build a complete snapshot (header + 2 entities) followed by a SnapshotPeerCount extension.
+    std::vector<uint8_t> buf;
+    const std::size_t hdrOffset = buf.size();
+
+    fl::MsgWorldSnapshotHeader hdr{};
+    hdr.tickIndex = 99u;
+    fl::appendMsg(buf, hdr); // placeholder
+
+    constexpr uint16_t kCount = 2;
+    for (uint16_t i = 0; i < kCount; ++i) {
+        fl::MsgEntityEntry e{};
+        e.entityIdx = 10u + i;
+        fl::appendMsg(buf, e);
+    }
+    hdr.entityCount = kCount;
+    fl::writeMsgAt(buf, hdrOffset, hdr);
+
+    // Append TLV extension.
+    const uint16_t kPeers = 7u;
+    fl::appendExt(buf, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), kPeers);
+
+    // Parse header and records exactly as ClientNetEventHandler does.
+    fl::MsgWorldSnapshotHeader rh{};
+    REQUIRE(fl::readMsg(buf.data(), buf.size(), rh));
+    CHECK(rh.tickIndex == 99u);
+    CHECK(rh.entityCount == kCount);
+
+    // Parse extension block.
+    const std::size_t extOffset =
+        sizeof(fl::MsgWorldSnapshotHeader) + static_cast<std::size_t>(rh.entityCount) * sizeof(fl::MsgEntityEntry);
+    REQUIRE(buf.size() > extOffset);
+
+    uint16_t pc{};
+    CHECK(fl::readExtValue(buf.data() + extOffset, buf.size() - extOffset,
+                           static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), pc));
+    CHECK(pc == kPeers);
+}
+
+TEST_CASE("WireCodec ext: old-receiver compatibility readMsg succeeds on extended packet", "[game_protocol]") {
+    // Build the same extended snapshot and verify that old-receiver code (readMsg only) still
+    // works correctly — it reads the header fields and ignores the extension bytes.
+    std::vector<uint8_t> buf;
+    const std::size_t hdrOffset = buf.size();
+
+    fl::MsgWorldSnapshotHeader hdr{};
+    hdr.tickIndex = 42u;
+    fl::appendMsg(buf, hdr);
+
+    fl::MsgEntityEntry e{};
+    e.entityIdx = 5u;
+    fl::appendMsg(buf, e);
+
+    hdr.entityCount = 1;
+    fl::writeMsgAt(buf, hdrOffset, hdr);
+
+    const uint16_t kPeers = 3u;
+    fl::appendExt(buf, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), kPeers);
+
+    // Old-receiver path: just call readMsg — succeeds, extension bytes ignored.
+    fl::MsgWorldSnapshotHeader rh{};
+    CHECK(fl::readMsg(buf.data(), buf.size(), rh));
+    CHECK(rh.msgId == static_cast<uint8_t>(fl::MsgId::WorldSnapshot));
+    CHECK(rh.tickIndex == 42u);
+    CHECK(rh.entityCount == 1u);
 }

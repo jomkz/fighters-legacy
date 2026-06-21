@@ -795,3 +795,63 @@ TEST_CASE("ClientNetEventHandler: second complete chunk stream prints correctly 
     CHECK(lines[0] == "[admin] first");
     CHECK(lines[1] == "[admin] second");
 }
+
+TEST_CASE("ClientNetEventHandler: WorldSnapshot with SnapshotPeerCount extension stores peer count",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // Build a WorldSnapshot with one entity entry followed by a SnapshotPeerCount TLV extension.
+    std::vector<uint8_t> pkt;
+    fl::MsgWorldSnapshotHeader hdr{};
+    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
+    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
+    hdr.entityCount = 1;
+    hdr.tickIndex = 10u;
+    fl::appendMsg(pkt, hdr);
+
+    fl::MsgEntityEntry e{};
+    e.entityIdx = 1u;
+    e.entityGen = 1u;
+    fl::appendMsg(pkt, e);
+
+    const uint16_t kPeers = 5u;
+    fl::appendExt(pkt, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), kPeers);
+
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    CHECK(handler.serverPeerCount() == kPeers);
+}
+
+TEST_CASE("ClientNetEventHandler: WorldSnapshot without extension leaves peer count at zero",
+          "[client_net_event_handler]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // Verify the default.
+    CHECK(handler.serverPeerCount() == 0u);
+
+    // Build a plain WorldSnapshot with no TLV extension.
+    std::vector<uint8_t> pkt;
+    fl::MsgWorldSnapshotHeader hdr{};
+    hdr.msgId = static_cast<uint8_t>(fl::MsgId::WorldSnapshot);
+    hdr.protocolVersion = static_cast<uint8_t>(fl::kProtocolVersion);
+    hdr.entityCount = 0;
+    hdr.tickIndex = 1u;
+    fl::appendMsg(pkt, hdr);
+
+    handler.onReceive(0u, pkt.data(), pkt.size());
+
+    // Peer count must remain at 0 — no extension was present.
+    CHECK(handler.serverPeerCount() == 0u);
+}

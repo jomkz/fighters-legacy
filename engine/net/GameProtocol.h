@@ -19,7 +19,10 @@ static constexpr uint8_t kNetChUnreliable = 1;
 // release, when the format FREEZES and these rules begin to bind:
 //   (a) a new MESSAGE TYPE gets a new MsgId; old peers discard unknown ids  -> no version bump;
 //   (b) a new TRAILING field appended to an existing struct is additive     -> no version bump;
-//   (c) changing an EXISTING field's meaning/offset/size is breaking        -> bump kProtocolVersion.
+//   (c) a new TLV EXTENSION entry appended after the fixed struct section   -> no version bump;
+//       receivers that do not call fl::readExtValue ignore extension bytes naturally (see
+//       WireCodec.h); see ExtTag below for the defined extension registry.
+//   (d) changing an EXISTING field's meaning/offset/size is breaking        -> bump kProtocolVersion.
 //
 // Layout rules (enforced by the static_asserts below):
 //   * Wire structs are NOT packed. Fields are ordered large->small and padded to natural alignment
@@ -323,5 +326,18 @@ static_assert(offsetof(MsgLanBeacon, name) == 10u, "MsgLanBeacon::name offset ch
 static constexpr uint8_t kGameModeCampaign = 0x01u;
 static constexpr uint8_t kGameModeMission = 0x02u;
 static constexpr uint8_t kGameModeSandbox = 0x04u;
+
+// Extension tag registry for TLV blocks appended after fixed message structs (see WireCodec.h).
+// Wire format per entry: [tag: uint16_t LE][len: uint16_t LE][data: len bytes].
+// Senders include any subset; receivers skip unknown tags via their len field.
+// Range layout:
+//   0x0100–0x01FF  MsgWorldSnapshot extensions (appended after entity record array)
+//   0x0200–0x02FF  MsgConnectAck extensions (reserved for future use)
+//   0x0300–0x03FF  MsgClientInput extensions (reserved for future use)
+//   0x0400–0x04FF  MsgWeatherState extensions (reserved for future use)
+//   Values outside defined ranges are reserved and must not be sent.
+enum class ExtTag : uint16_t {
+    SnapshotPeerCount = 0x0100, // uint16_t: active connected peer count at snapshot time
+};
 
 } // namespace fl
