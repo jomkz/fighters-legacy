@@ -82,6 +82,76 @@ TEST_CASE("WireCodec: viewMsg returns a pointer when aligned, nullptr when not",
     CHECK(fl::viewMsg<fl::MsgEntityEntry>(storage, sizeof(src) - 1) == nullptr);
 }
 
+TEST_CASE("WireCodec ext: single extension round-trip via appendExt and readExtValue", "[wire_codec]") {
+    std::vector<uint8_t> buf;
+    const uint32_t kVal = 0xDEADBEEFu;
+    fl::appendExt(buf, 0x0100u, kVal);
+
+    // 4-byte TLV header + 4-byte uint32_t
+    REQUIRE(buf.size() == 8u);
+
+    uint32_t out{};
+    CHECK(fl::readExtValue(buf.data(), buf.size(), 0x0100u, out));
+    CHECK(out == kVal);
+}
+
+TEST_CASE("WireCodec ext: findExt returns nullptr for absent tag", "[wire_codec]") {
+    std::vector<uint8_t> buf;
+    const uint16_t kPresent = 42u;
+    fl::appendExt(buf, 0x0100u, kPresent);
+
+    uint16_t valueLen{};
+    CHECK(fl::findExt(buf.data(), buf.size(), 0x0101u, valueLen) == nullptr);
+}
+
+TEST_CASE("WireCodec ext: multiple extensions skip unknown tag to find known one", "[wire_codec]") {
+    std::vector<uint8_t> buf;
+    const uint32_t kFirst = 11u;
+    const uint16_t kSecond = 22u;
+    fl::appendExt(buf, 0x0101u, kFirst);  // not the target
+    fl::appendExt(buf, 0x0100u, kSecond); // the target
+
+    uint16_t out{};
+    CHECK(fl::readExtValue(buf.data(), buf.size(), 0x0100u, out));
+    CHECK(out == kSecond);
+
+    // First tag must also be found independently.
+    uint32_t first{};
+    CHECK(fl::readExtValue(buf.data(), buf.size(), 0x0101u, first));
+    CHECK(first == kFirst);
+}
+
+TEST_CASE("WireCodec ext: malformed extension block truncated handled safely", "[wire_codec]") {
+    // Manually craft: tag=0x0100, len=10 but only 2 data bytes present.
+    std::vector<uint8_t> buf;
+    const uint16_t tag = 0x0100u;
+    const uint16_t len = 10u;
+    buf.resize(4 + 2); // header + 2 data bytes (not 10)
+    std::memcpy(buf.data(), &tag, 2);
+    std::memcpy(buf.data() + 2, &len, 2);
+    buf[4] = 0xAA;
+    buf[5] = 0xBB;
+
+    uint16_t valueLen{};
+    CHECK(fl::findExt(buf.data(), buf.size(), 0x0100u, valueLen) == nullptr);
+}
+
+TEST_CASE("WireCodec ext: appendExtRaw and findExt raw bytes round-trip", "[wire_codec]") {
+    const uint8_t kBytes[3] = {0x11, 0x22, 0x33};
+    std::vector<uint8_t> buf;
+    fl::appendExtRaw(buf, 0x0200u, kBytes, 3u);
+
+    REQUIRE(buf.size() == 7u); // 4-byte header + 3 bytes
+
+    uint16_t valueLen{};
+    const uint8_t* p = fl::findExt(buf.data(), buf.size(), 0x0200u, valueLen);
+    REQUIRE(p != nullptr);
+    CHECK(valueLen == 3u);
+    CHECK(p[0] == 0x11);
+    CHECK(p[1] == 0x22);
+    CHECK(p[2] == 0x33);
+}
+
 TEST_CASE("WireCodec: appendMsg + writeMsgAt build a snapshot the reader round-trips", "[wire_codec]") {
     // Mirror the server snapshot builder: placeholder header, append entries, patch the count back in.
     std::vector<uint8_t> buf;

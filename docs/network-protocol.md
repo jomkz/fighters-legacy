@@ -16,7 +16,9 @@ this via dead-reckoning (`rendered_pos = pos + vel × alpha × kTickDt`).
 
 ## Implementation Rules
 
-- All wire structs use `#pragma pack(1)` — no implicit padding.
+- Wire structs are **unpacked** and use natural field alignment — fields ordered large→small with
+  explicit `reserved` padding; no implicit compiler padding is inserted. `static_assert`s on
+  `sizeof`/`offsetof`/`alignof` lock the layout across MSVC/GCC/Clang.
 - All multi-byte fields are **little-endian**. All supported targets (x86-64, arm64,
   Apple Silicon) are natively little-endian; no byte-swapping is performed at the sender
   or receiver.
@@ -362,6 +364,45 @@ call.
 
 **Deduplication:** `DiscoveryListener` merges beacons with the same `(gamePort, name)` into one
 `ServerInfo` entry regardless of source address family.
+
+---
+
+## Extension Blocks (TLV)
+
+Optional TLV (Type-Length-Value) extension blocks may be appended after the fixed struct section of
+any message packet. Each extension entry:
+
+```
+[tag: uint16_t LE][len: uint16_t LE][data: len bytes]
+[tag: uint16_t LE][len: uint16_t LE][data: len bytes]
+... (more; parsing stops when fewer than 4 bytes remain in the extension region)
+```
+
+The extension block begins at:
+- **Single-struct messages**: offset `sizeof(FixedStruct)`
+- **Array messages** (header + N records): offset `sizeof(Header) + N × sizeof(Record)`
+
+**Backward compatibility**: old receivers that call `readMsg<T>()` or iterate records up to
+`entityCount` naturally stop at the right byte count and ignore trailing extension bytes — no code
+change is required for old receivers to remain correct. New receivers call `fl::readExtValue()` for
+known tags and skip unknown tags via their `len` field.
+
+Helpers: `fl::findExt`, `fl::readExtValue<T>`, `fl::appendExt<T>`, `fl::appendExtRaw` in
+`engine/net/WireCodec.h`. Tag registry: `fl::ExtTag` enum in `engine/net/GameProtocol.h`.
+
+### Defined Extension Tags
+
+| Tag | Value | Type | Message | Description |
+|-----|-------|------|---------|-------------|
+| `SnapshotPeerCount` | `0x0100` | `uint16_t` | `MsgWorldSnapshot` | Active connected peer count at the time the snapshot was built. Emitted by `WorldBroadcaster` every tick; stored by `ClientNetEventHandler::serverPeerCount()`. |
+
+**Reserved ranges:**
+- `0x0000`: reserved
+- `0x0100–0x01FF`: `MsgWorldSnapshot` extensions
+- `0x0200–0x02FF`: `MsgConnectAck` extensions (reserved for future use)
+- `0x0300–0x03FF`: `MsgClientInput` extensions (reserved for future use)
+- `0x0400–0x04FF`: `MsgWeatherState` extensions (reserved for future use)
+- All other values: reserved; must not be sent
 
 ---
 

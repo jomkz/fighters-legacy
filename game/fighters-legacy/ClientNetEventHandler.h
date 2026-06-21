@@ -71,6 +71,12 @@ struct ClientNetEventHandler : INetworkEventHandler {
         return m_planetRadiusKm;
     }
 
+    // Active connected peer count from the last received MsgWorldSnapshot TLV extension block
+    // (ExtTag::SnapshotPeerCount). Returns 0 if no extended snapshot has been received yet.
+    uint16_t serverPeerCount() const noexcept {
+        return m_serverPeerCount.load(std::memory_order_relaxed);
+    }
+
     // Issue a monotonically incrementing request ID for the next MsgAdminCommand.
     // Each call increments the counter; wraps at uint16_t max (harmless — ENet ordering prevents
     // interleaving and the client does not enforce reqId matching in chunk reassembly).
@@ -84,7 +90,8 @@ struct ClientNetEventHandler : INetworkEventHandler {
 
     bool m_connected{false};
     float m_planetRadiusKm{6371.f};
-    uint16_t m_nextReqId{1}; // next reqId to stamp on outgoing MsgAdminCommand
+    uint16_t m_nextReqId{1};                    // next reqId to stamp on outgoing MsgAdminCommand
+    std::atomic<uint16_t> m_serverPeerCount{0}; // updated from SnapshotPeerCount TLV extension
 
     // Chunk reassembly state for MsgAdminResponseChunk (0x0A) streaming responses.
     std::string m_chunkBuf;

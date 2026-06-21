@@ -376,6 +376,11 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     hdr.entityCount = count;
     writeMsgAt(buf, hdrOffset, hdr);
 
+    // TLV extension block appended after entity records.
+    const auto peerCount =
+        static_cast<uint16_t>(std::max(0, std::min(m_activePeerCount.load(std::memory_order_relaxed), 65535)));
+    appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerCount), peerCount);
+
     m_net.broadcast(buf.data(), buf.size(), /*reliable=*/false);
 
     // Tick weather and broadcast MsgWeatherState every 10 ticks (~6 Hz at 60 Hz sim).

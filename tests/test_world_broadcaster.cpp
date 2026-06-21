@@ -9,6 +9,7 @@
 #include "entity/IEntityController.h"
 #include "flight/CentralGravityField.h"
 #include "net/GameProtocol.h"
+#include "net/WireCodec.h"
 #include "net/WorldBroadcaster.h"
 #include "render/RenderSnapshot.h"
 #include "weather/WeatherController.h"
@@ -230,11 +231,18 @@ TEST_CASE("WorldBroadcaster: onTick with zero entities broadcasts empty header",
     broadcaster.onTick(1.0 / 60.0, 5u);
 
     REQUIRE(net.broadcasts.size() == 1u);
+    const auto& pkt = net.broadcasts[0];
     fl::MsgWorldSnapshotHeader hdr;
-    std::memcpy(&hdr, net.broadcasts[0].data(), sizeof(hdr));
+    std::memcpy(&hdr, pkt.data(), sizeof(hdr));
     CHECK(hdr.entityCount == 0u);
     CHECK(hdr.tickIndex == 5u);
-    CHECK(net.broadcasts[0].size() == sizeof(hdr));
+
+    // Packet now includes a 6-byte SnapshotPeerCount TLV extension after the header.
+    REQUIRE(pkt.size() == sizeof(hdr) + 6u);
+    uint16_t pc{};
+    CHECK(fl::readExtValue(pkt.data() + sizeof(hdr), pkt.size() - sizeof(hdr),
+                           static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), pc));
+    CHECK(pc == 0u); // no peers connected in this test
 }
 
 TEST_CASE("WorldBroadcaster: onConnect sends ConnectAck with registered types and spawns entity",
