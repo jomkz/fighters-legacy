@@ -581,7 +581,7 @@ To report phase completion against target dates:
 ./scripts/roadmap-status.sh
 ```
 
-Queries the [GitHub Project](https://github.com/users/jomkz/projects/2) via `gh` and prints a per-phase progress table showing % done, % of time elapsed, and an on-track/at-risk/behind/overdue signal. Requires `gh` (authenticated) and GNU `date`.
+Queries the [GitHub Project](https://github.com/orgs/fighters-legacy/projects/1) via `gh` and prints a per-phase progress table showing % done, % of time elapsed, and an on-track/at-risk/behind/overdue signal. Requires `gh` (authenticated) and GNU `date`.
 
 ---
 

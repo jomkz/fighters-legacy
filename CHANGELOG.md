@@ -17,8 +17,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `docs/development.md` path table); removed the repo-local `SECURITY.md`,
   `CODE_OF_CONDUCT.md`, and `TRADEMARK.md` in favour of the org-wide `fighters-legacy/.github`
   defaults, repointing inbound links to their canonical `.github` URLs; and pointed
-  `CODEOWNERS` at the `@fighters-legacy/maintainers` team. Content-pack repositories
-  (`fa-content`, `fl-base-pack`) keep their `jomkz` URLs until those repos are transferred.
+  `CODEOWNERS` at the `@fighters-legacy/maintainers` team. Also repointed the content-pack
+  repository references (`fa-content` in `CLAUDE.md`, `fl-base-pack` in
+  `docs/architecture.md`) and the GitHub Project tooling (`scripts/roadmap-status.sh` now
+  queries `organization(login: "fighters-legacy")` project 1; `docs/development.md` links to
+  `orgs/fighters-legacy/projects/1`) to the org now that those repos and the project board
+  have been transferred.
 
 - **docs**: clarified the distribution & monetization strategy in `docs/distribution.md`
   — adopts a softened, Ardour-style "sell convenience, not the game" model (GPL §6 makes

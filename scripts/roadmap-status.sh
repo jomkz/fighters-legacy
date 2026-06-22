@@ -4,15 +4,15 @@
 
 set -euo pipefail
 
-OWNER="jomkz"
-PROJECT_NUM=2
+OWNER="fighters-legacy"
+PROJECT_NUM=1
 TODAY=$(date +%Y-%m-%d)
 TODAY_TS=$(date -d "$TODAY" +%s)
 
 DATA=$(gh api graphql -f query='
 {
-  user(login: "jomkz") {
-    projectV2(number: 2) {
+  organization(login: "fighters-legacy") {
+    projectV2(number: 1) {
       fields(first: 20) {
         nodes {
           ... on ProjectV2SingleSelectField {
@@ -45,7 +45,7 @@ DATA=$(gh api graphql -f query='
 }')
 
 ITEMS=$(echo "$DATA" | jq -r '
-  .data.user.projectV2.items.nodes[] |
+  .data.organization.projectV2.items.nodes[] |
   {
     state: (.content.state // ""),
     phase: ([.fieldValues.nodes[] | select(.field?.name == "Phase") | .name] | first // ""),
@@ -67,7 +67,7 @@ while IFS=$'\t' read -r pname color; do
     *)      PHASE_COLOR[$pname]=''              ;;
   esac
 done < <(echo "$DATA" | jq -r '
-  .data.user.projectV2.fields.nodes[] |
+  .data.organization.projectV2.fields.nodes[] |
   select(.name? == "Phase") |
   .options[] |
   [.name, .color] | @tsv
