@@ -2,6 +2,8 @@
 #include "ServerCommands.h"
 
 #include "ai/AiControllerFactory.h"
+#include "entity/EntityTypeRegistry.h"
+#include "script/LuaController.h"
 #include "server_config.h"
 #include <ILogger.h>
 #include <console/CommandRegistry.h>
@@ -496,63 +498,116 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                 }
             }
 
-            ctx.sim.gameLoop->enqueueSimCallback([ctx, typeId, x, y, z, behavior, behaviorArgStrings]() {
-                fl::EntityTransform t{};
-                t.pos[0] = x;
-                t.pos[1] = y;
-                t.pos[2] = z;
-                fl::EntityId id = ctx.sim.entityManager->spawn(typeId.c_str(), t);
-                char m[160];
-                if (id.valid()) {
-                    std::snprintf(m, sizeof(m), "[admin] spawned %s entity=%u/%u", typeId.c_str(), id.index,
-                                  id.generation);
-                    std::printf("%s\n", m);
-                    if (ctx.rcon.shell)
-                        ctx.rcon.shell->print(m);
+            // Resolve Lua AI script bytes on the dispatch thread (main or sim thread).
+            // ctx.env.loadAIScript reads from a pre-loaded read-only cache — safe from any thread.
+            std::string luaScriptSrc;
+            std::string luaScriptRoot;
+            std::string effectiveBehavior = behavior; // may change to "lua" from aiScriptId auto-detect
 
-                    if (!behavior.empty() && ctx.sim.broadcaster) {
-                        // Rebuild string_views from the captured strings (safe — strings owned by capture).
-                        std::vector<std::string_view> argViews;
-                        argViews.reserve(behaviorArgStrings.size());
-                        for (const auto& s : behaviorArgStrings)
-                            argViews.push_back(s);
-
-                        auto ctrl = fl::ai::createController(behavior, std::span<std::string_view>(argViews),
-                                                             ctx.sim.entityManager);
-                        if (ctrl) {
-                            ctx.sim.broadcaster->registerController(id, std::move(ctrl));
-                            char am[128];
-                            std::snprintf(am, sizeof(am), "[admin] attached AI '%s' to entity=%u", behavior.c_str(),
-                                          id.index);
-                            std::printf("%s\n", am);
-                            if (ctx.rcon.shell)
-                                ctx.rcon.shell->print(am);
-                        } else {
-                            char wm[128];
-                            std::snprintf(wm, sizeof(wm), "[admin] spawn: unknown AI behavior '%s' or bad args",
-                                          behavior.c_str());
-                            std::printf("%s\n", wm);
-                            if (ctx.rcon.shell)
-                                ctx.rcon.shell->print(wm);
-                        }
-                    }
-                } else {
-                    std::snprintf(m, sizeof(m), "[admin] spawn: type '%s' unknown or cap reached", typeId.c_str());
-                    std::printf("%s\n", m);
-                    if (ctx.rcon.shell)
-                        ctx.rcon.shell->print(m);
+            if (behavior == "lua") {
+                if (!ctx.env.loadAIScript)
+                    return "spawn: --ai lua: Lua AI scripting not available";
+                std::string scriptName = behaviorArgStrings.empty() ? "" : behaviorArgStrings[0];
+                if (scriptName.empty())
+                    return "spawn: --ai lua requires a script name";
+                auto [src, root] = ctx.env.loadAIScript(scriptName);
+                if (src.empty()) {
+                    char em[128];
+                    std::snprintf(em, sizeof(em), "spawn: --ai lua: script '%s' not found", scriptName.c_str());
+                    return std::string(em);
                 }
-                std::fflush(stdout);
-            });
+                luaScriptSrc = std::move(src);
+                luaScriptRoot = std::move(root);
+            } else if (behavior.empty() && ctx.sim.typeRegistry && ctx.env.loadAIScript) {
+                // Auto-detect: check if the entity type has a default AI script.
+                const fl::EntityDef* def = ctx.sim.typeRegistry->findById(typeId.c_str());
+                if (def && !def->aiScriptId.empty()) {
+                    auto [src, root] = ctx.env.loadAIScript(def->aiScriptId);
+                    if (!src.empty()) {
+                        luaScriptSrc = std::move(src);
+                        luaScriptRoot = std::move(root);
+                        effectiveBehavior = "lua:" + def->aiScriptId;
+                    }
+                }
+            }
+
+            ctx.sim.gameLoop->enqueueSimCallback(
+                [ctx, typeId, x, y, z, behavior, behaviorArgStrings, luaScriptSrc, luaScriptRoot]() {
+                    fl::EntityTransform t{};
+                    t.pos[0] = x;
+                    t.pos[1] = y;
+                    t.pos[2] = z;
+                    fl::EntityId id = ctx.sim.entityManager->spawn(typeId.c_str(), t);
+                    char m[160];
+                    if (id.valid()) {
+                        std::snprintf(m, sizeof(m), "[admin] spawned %s entity=%u/%u", typeId.c_str(), id.index,
+                                      id.generation);
+                        std::printf("%s\n", m);
+                        if (ctx.rcon.shell)
+                            ctx.rcon.shell->print(m);
+
+                        if (ctx.sim.broadcaster) {
+                            std::unique_ptr<fl::IEntityController> ctrl;
+
+                            if (!luaScriptSrc.empty()) {
+                                // Lua AI controller — constructed on sim thread.
+                                auto luaCtrl =
+                                    std::make_unique<LuaController>(luaScriptSrc, luaScriptRoot, ctx.sim.entityManager);
+                                if (luaCtrl->isValid()) {
+                                    ctrl = std::move(luaCtrl);
+                                } else {
+                                    char em[192];
+                                    std::snprintf(em, sizeof(em), "[admin] spawn: Lua script error: %s",
+                                                  luaCtrl->lastError().c_str());
+                                    std::printf("%s\n", em);
+                                    if (ctx.rcon.shell)
+                                        ctx.rcon.shell->print(em);
+                                }
+                            } else if (!behavior.empty() && behavior != "lua") {
+                                // C++ AI controller via factory.
+                                std::vector<std::string_view> argViews;
+                                argViews.reserve(behaviorArgStrings.size());
+                                for (const auto& s : behaviorArgStrings)
+                                    argViews.push_back(s);
+                                ctrl = fl::ai::createController(behavior, std::span<std::string_view>(argViews),
+                                                                ctx.sim.entityManager);
+                                if (!ctrl) {
+                                    char wm[128];
+                                    std::snprintf(wm, sizeof(wm), "[admin] spawn: unknown AI behavior '%s' or bad args",
+                                                  behavior.c_str());
+                                    std::printf("%s\n", wm);
+                                    if (ctx.rcon.shell)
+                                        ctx.rcon.shell->print(wm);
+                                }
+                            }
+
+                            if (ctrl) {
+                                ctx.sim.broadcaster->registerController(id, std::move(ctrl));
+                                char am[128];
+                                std::snprintf(am, sizeof(am), "[admin] attached AI '%s' to entity=%u",
+                                              behavior.empty() ? "lua(auto)" : behavior.c_str(), id.index);
+                                std::printf("%s\n", am);
+                                if (ctx.rcon.shell)
+                                    ctx.rcon.shell->print(am);
+                            }
+                        }
+                    } else {
+                        std::snprintf(m, sizeof(m), "[admin] spawn: type '%s' unknown or cap reached", typeId.c_str());
+                        std::printf("%s\n", m);
+                        if (ctx.rcon.shell)
+                            ctx.rcon.shell->print(m);
+                    }
+                    std::fflush(stdout);
+                });
 
             char spawnBuf[160];
-            if (behavior.empty()) {
+            if (effectiveBehavior.empty()) {
                 std::snprintf(spawnBuf, sizeof(spawnBuf), "spawn: queued type %s at %.1f %.1f %.1f", typeId.c_str(),
                               static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
             } else {
                 std::snprintf(spawnBuf, sizeof(spawnBuf), "spawn: queued type %s at %.1f %.1f %.1f --ai %s",
                               typeId.c_str(), static_cast<float>(x), static_cast<float>(y), static_cast<float>(z),
-                              behavior.c_str());
+                              effectiveBehavior.c_str());
             }
             return std::string(spawnBuf);
         });

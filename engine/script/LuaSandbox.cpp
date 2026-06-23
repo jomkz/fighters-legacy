@@ -70,10 +70,15 @@ static int luaRequireLoader(lua_State* L) {
         }
     } // scriptPath, f, ss, src all destroyed here
 
-    // All C++ objects are gone. lua_error() longjmps are now safe.
+    // All C++ objects are gone. lua_error() / lua_call longjmps are now safe.
     switch (res) {
     case Res::Ok:
-        return 1; // compiled chunk is on the Lua stack
+        // Execute the compiled chunk and return all its values as the module.
+        // lua_call propagates any chunk error to the enclosing lua_pcall (loadScript).
+        // At this point no C++ dtors are pending, so longjmp is safe.
+        lua_call(L, 0, LUA_MULTRET);
+        // Stack: [module_name_arg, result0, result1, ...]; return only the results.
+        return lua_gettop(L) - 1;
     case Res::NotFound:
         return luaL_error(L, "require: module '%s' not found in pack ai/ directory", module);
     case Res::Bytecode:
@@ -165,4 +170,8 @@ bool LuaSandbox::loadScript(std::string_view source) {
 
 const std::string& LuaSandbox::lastError() const {
     return m_impl->lastError;
+}
+
+lua_State* LuaSandbox::luaState() const {
+    return m_impl->L;
 }

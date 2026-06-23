@@ -7,7 +7,9 @@
 #include <csignal>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <unordered_set>
+#include <utility>
 
 class CommandRegistry;
 class CommandShell;
@@ -41,6 +43,10 @@ struct ServerCommandContext {
         std::chrono::steady_clock::time_point startTime{};
         volatile sig_atomic_t* quitFlag{nullptr}; // quit command sets this to 1
         DiscoveryBeacon* beacon{nullptr};         // for reload_config name update
+        // Loads an AI script by asset name. Returns {source_bytes_as_string, pack_root_dir}.
+        // Empty source = not found. Null = Lua AI scripting unavailable.
+        // Must be safe to call from any thread (pre-loaded read-only cache in fl-server).
+        std::function<std::pair<std::string, std::string>(std::string_view name)> loadAIScript;
     } env;
 
     // Shutdown command policy (from ServerConfig [shutdown] section).

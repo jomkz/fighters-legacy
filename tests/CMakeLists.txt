@@ -161,7 +161,7 @@ if(TARGET platform-enet)
     target_link_libraries(test_admin_console PRIVATE
         Catch2::Catch2WithMain
         fl-server-config engine-console engine-net engine-entity engine-weather engine-loop
-        engine-ai)
+        engine-ai engine-script)
     target_include_directories(test_admin_console PRIVATE
         "${CMAKE_SOURCE_DIR}/server/fl-server"
         "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -400,6 +400,12 @@ add_executable(test_lua_sandbox test_lua_sandbox.cpp)
 target_link_libraries(test_lua_sandbox PRIVATE Catch2::Catch2WithMain engine-script)
 target_include_directories(test_lua_sandbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 catch_discover_tests(test_lua_sandbox)
+
+add_executable(test_lua_controller test_lua_controller.cpp)
+target_link_libraries(test_lua_controller PRIVATE
+    Catch2::Catch2WithMain engine-script engine-spatial)
+target_include_directories(test_lua_controller PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+catch_discover_tests(test_lua_controller)
 
 add_executable(test_haptic_controller test_haptic_controller.cpp
     "${CMAKE_SOURCE_DIR}/game/fighters-legacy/HapticController.cpp")

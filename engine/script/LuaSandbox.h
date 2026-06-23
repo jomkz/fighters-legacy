@@ -5,6 +5,10 @@
 #include <string>
 #include <string_view>
 
+// Forward declaration — callers that dereference the returned pointer
+// must include <lua.h> (with extern "C" guard) in their own .cpp files.
+struct lua_State;
+
 // Restricted Lua 5.5 execution environment for AI and mission scripts.
 //
 // Allowed libraries: math, string, table, coroutine.
@@ -32,6 +36,10 @@ class LuaSandbox {
     bool loadScript(std::string_view source);
 
     const std::string& lastError() const;
+
+    // Returns the underlying Lua state for registering additional globals
+    // before loadScript() is called. Do not call after loadScript().
+    lua_State* luaState() const;
 
   private:
     LuaSandbox();

@@ -105,6 +105,16 @@ std::shared_ptr<TerrainData> AssetManager::loadTerrain(const char* name) {
 std::shared_ptr<AIScript> AssetManager::loadAIScript(const char* name) {
     return loadAsset<AIScript>(AssetType::AIScript, name, &IContentPack::loadAIScript);
 }
+
+std::string AssetManager::findPackRootForAsset(AssetType type, const char* name) const {
+    for (auto& pack : m_packs) {
+        if (pack->hasAsset(name, type)) {
+            const char* root = pack->rootDirectory();
+            return root ? root : "";
+        }
+    }
+    return "";
+}
 std::shared_ptr<EntityDefData> AssetManager::loadEntityDef(const char* name) {
     return loadAsset<EntityDefData>(AssetType::EntityDef, name, &IContentPack::loadEntityDef);
 }
@@ -131,9 +141,13 @@ bool AssetManager::hasPacks() const {
 }
 
 std::vector<std::string> AssetManager::listMissions() const {
+    return listAssets(AssetType::Mission);
+}
+
+std::vector<std::string> AssetManager::listAssets(AssetType type) const {
     std::vector<std::string> result;
     for (auto& pack : m_packs) {
-        for (auto& id : pack->listAssets(AssetType::Mission)) {
+        for (auto& id : pack->listAssets(type)) {
             bool dup = false;
             for (auto& existing : result)
                 if (existing == id) {

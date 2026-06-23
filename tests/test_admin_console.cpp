@@ -441,6 +441,38 @@ TEST_CASE("AdminConsole async ack: spawn returns non-empty ack with type", "[adm
     CHECK(out.find("builtin:debug-entity") != std::string::npos);
 }
 
+TEST_CASE("AdminConsole: spawn --ai lua returns error when loadAIScript is null", "[admin_console][async_ack]") {
+    AsyncAckFixture f;
+    f.ctx.env.loadAIScript = nullptr;
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("spawn builtin:debug-entity 0 100 0 --ai lua patrol");
+    // When loadAIScript is null the command returns an error string immediately.
+    CHECK_FALSE(out.empty());
+    CHECK(out.find("not available") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: spawn --ai lua returns error when script not found", "[admin_console][async_ack]") {
+    AsyncAckFixture f;
+    f.ctx.env.loadAIScript = [](std::string_view) -> std::pair<std::string, std::string> {
+        return {}; // empty = not found
+    };
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("spawn builtin:debug-entity 0 100 0 --ai lua patrol");
+    CHECK_FALSE(out.empty());
+    CHECK(out.find("not found") != std::string::npos);
+}
+
+TEST_CASE("AdminConsole: spawn --ai lua returns non-empty ack when script valid", "[admin_console][async_ack]") {
+    AsyncAckFixture f;
+    f.ctx.env.loadAIScript = [](std::string_view) -> std::pair<std::string, std::string> {
+        return {"function compute_control(s,t,dt) return {} end", ""};
+    };
+    auto reg = makeRegistry(f.ctx);
+    std::string out = reg.dispatch("spawn builtin:debug-entity 0 100 0 --ai lua patrol");
+    CHECK_FALSE(out.empty());
+    CHECK(out.find("builtin:debug-entity") != std::string::npos);
+}
+
 TEST_CASE("AdminConsole async ack: kill returns non-empty ack with index", "[admin_console][async_ack]") {
     AsyncAckFixture f;
     auto reg = makeRegistry(f.ctx);

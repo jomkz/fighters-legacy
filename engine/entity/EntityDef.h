@@ -20,6 +20,7 @@ struct EntityDef {
     std::string mesh;                // asset name for primary geometry
     std::string classicDamageMesh;   // JumpToDamage geometry variant; empty if none
     std::string flightModelId;       // flight-model asset id; empty = builtin UFO model (server-side only)
+    std::string aiScriptId;          // Lua AI script asset name; empty = no scripted AI (server-side only)
 };
 
 } // namespace fl

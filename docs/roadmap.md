@@ -27,17 +27,16 @@ drifted from reality during Phase 2. Ordering constraints are listed instead.
    Broadphase index enables range queries needed for interest management; both must be in
    before Phase 4 multiplayer acceptance testing with real clients.
 
-2. **LuaSandbox wired (#359) → fl-base-pack AI scripts → AI System (#33)**
-   fl-base-pack Lua behaviour scripts have nothing to run against until `IEntityController`
-   integration is complete in Phase 3.
+2. **LuaSandbox wired (#359 ✓) → fl-base-pack AI scripts → AI System (#33)**
+   fl-base-pack Lua behaviour scripts can now target the `compute_control` API shipped in #359.
 
 3. **Server-side AI framework (#352) → AI System (#33) → radar/weapons AI (#42)**
    Flight controller framework is the substrate; the full AI system and radar/weapons AI
    build on top of it in Phase 4.
 
 4. **fl-base-pack #1–#6 (aircraft, terrain, missions, audio, AI) → Phase 4 acceptance testing**
-   fl-base-pack content work can start in parallel with Phase 3 (except AI scripts, which
-   wait on #359). Phase 4 acceptance is gated on fl-base-pack being substantially complete.
+   fl-base-pack content work can start in parallel with Phase 3. Phase 4 acceptance is gated
+   on fl-base-pack being substantially complete.
 
 5. **IGui HAL (#156) → in-game mission editor (#49), subtitle rendering (#165), crash overlay (#236)**
    All Phase 5 features depend on the IGui interface being stable.
