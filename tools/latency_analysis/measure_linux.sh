@@ -26,7 +26,7 @@ BENCH_RATE=60
 mkdir -p "$RESULTS_DIR"
 
 FLSERVER="$BUILD_DIR/server/fl-server/fl-server"
-NETCHK="$BUILD_DIR/tools/net_check/net_check"
+NETCHK="$BUILD_DIR/tools/net_check"
 [[ -x "$FLSERVER" ]] || { echo "ERROR: fl-server not found at $FLSERVER"; echo "Build first: cmake --build --preset debug"; exit 1; }
 [[ -x "$NETCHK"  ]] || { echo "ERROR: net_check not found at $NETCHK";  exit 1; }
 
@@ -60,11 +60,12 @@ SOCKPERF_SUMMARY=""
 if command -v sockperf &>/dev/null; then
     echo ""
     echo "--- sockperf UDP loopback baseline (600 msg at 60 Hz, 32-byte payload) ---"
-    sockperf server --ip 127.0.0.1 --port 11111 --daemonize --log-file /dev/null 2>/dev/null || true
+    sockperf server -i 127.0.0.1 -p 11111 &>/dev/null &
+    SOCKPERF_SERVER_PID=$!
     sleep 0.5
-    SOCKPERF_SUMMARY=$(sockperf ping-pong --ip 127.0.0.1 --port 11111 \
+    SOCKPERF_SUMMARY=$(sockperf ping-pong -i 127.0.0.1 -p 11111 \
         --time 11 --mps 60 --msg-size 32 2>&1 | grep -E "Summary|percentile|avg" | tr '\n' ';' || true)
-    pkill -f "sockperf server" 2>/dev/null || true
+    kill "$SOCKPERF_SERVER_PID" 2>/dev/null || true
     echo "$SOCKPERF_SUMMARY"
 else
     echo "WARN: sockperf not found — skipping UDP baseline."

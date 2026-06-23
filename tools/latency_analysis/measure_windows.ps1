@@ -29,7 +29,7 @@ $BenchRate    = 60
 New-Item -ItemType Directory -Force -Path $ResultsDir | Out-Null
 
 $FlServer = Join-Path $BuildDir "server\fl-server\fl-server.exe"
-$NetChk   = Join-Path $BuildDir "tools\net_check\net_check.exe"
+$NetChk   = Join-Path $BuildDir "tools\net_check.exe"
 if (-not (Test-Path $FlServer)) {
     Write-Error "fl-server not found: $FlServer`nBuild first: cmake --build --preset debug-msvc"
 }
