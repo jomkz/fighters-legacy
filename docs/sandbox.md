@@ -232,6 +232,7 @@ Entity indices shown by `entities` come from the most-recent render snapshot.
 | `pursuit` | `<entityIdx>` | Pursue an entity by pool index; returns neutral when target is dead or invalid |
 | `evade` | `<entityIdx>` | Flee a threat entity by inverting the pursuit heading error |
 | `break` | `<entityIdx> [rollDuration]` | Defensive ACM: roll toward threat then pull maximum-G (rollDuration in seconds, default 0.5) |
+| `lua` | `<script_name>` | Load a Lua AI script from the content pack's `ai/` directory (e.g. `patrol`, `interceptor`). See `docs/modding/ai.md`. |
 
 **Weather presets:**
 

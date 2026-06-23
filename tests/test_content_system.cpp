@@ -1692,3 +1692,34 @@ TEST_CASE("AssetManager::listMissions deduplicates across packs", "[content]") {
     auto missions = am.listMissions();
     REQUIRE(missions.size() == 3u); // m01, m02, m03 (no dupe)
 }
+
+TEST_CASE("AssetManager::findPackRootForAsset returns root dir of owning pack", "[content]") {
+    MockLogger logger;
+
+    MockContentPack pack;
+    pack.packRootDir = "/packs/fl-base";
+    // Register a known AI script asset name.
+    pack.assets[{"patrol", AssetType::AIScript}] = {'r', 'e', 't', 'u', 'r', 'n'};
+
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::make_unique<MockContentPack>(pack));
+    AssetManager am(std::move(packs), logger);
+
+    std::string root = am.findPackRootForAsset(AssetType::AIScript, "patrol");
+    CHECK(root == "/packs/fl-base");
+}
+
+TEST_CASE("AssetManager::findPackRootForAsset returns empty string when asset not found", "[content]") {
+    MockLogger logger;
+
+    MockContentPack pack;
+    pack.packRootDir = "/packs/fl-base";
+    // No AI script registered.
+
+    std::vector<std::unique_ptr<IContentPack>> packs;
+    packs.push_back(std::make_unique<MockContentPack>(pack));
+    AssetManager am(std::move(packs), logger);
+
+    std::string root = am.findPackRootForAsset(AssetType::AIScript, "nonexistent");
+    CHECK(root.empty());
+}

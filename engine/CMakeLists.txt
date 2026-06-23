@@ -235,9 +235,12 @@ target_link_libraries(engine-console
 # Sandboxed Lua 5.5 execution environment for AI and mission scripts.
 add_library(engine-script STATIC
     script/LuaSandbox.cpp
+    script/LuaController.cpp
 )
 target_include_directories(engine-script PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(engine-script
     PUBLIC  platform-hal
+            engine-entity      # IEntityController, EntityState, EntityManager
     PRIVATE lua::lua
+            engine-ai          # Guidance.h math for LuaController bindings
 )

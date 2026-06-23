@@ -445,6 +445,25 @@ TEST_CASE("EntityDefParser: absent optional [classic] section leaves classicDama
     CHECK(def.classicDamageMesh.empty());
 }
 
+TEST_CASE("EntityDefParser: minimal TOML leaves aiScriptId empty", "[parser]") {
+    fl::EntityDef def = fl::parseEntityDef(kMinimalEntityToml);
+    CHECK(def.aiScriptId.empty());
+}
+
+TEST_CASE("EntityDefParser: ai_script field is parsed when present", "[parser]") {
+    static const char* kTomlWithScript = R"(
+[entity]
+id        = "test:bot"
+name      = "Bot"
+category  = "air_vehicle"
+max_hp    = 100.0
+mesh      = "aircraft/bot"
+ai_script = "patrol"
+)";
+    fl::EntityDef def = fl::parseEntityDef(kTomlWithScript);
+    CHECK(def.aiScriptId == "patrol");
+}
+
 TEST_CASE("EntityDefParser: invalid TOML syntax throws runtime_error", "[parser]") {
     CHECK_THROWS_AS(fl::parseEntityDef("not valid toml {{{"), std::runtime_error);
 }

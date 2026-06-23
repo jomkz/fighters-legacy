@@ -528,35 +528,80 @@ icon      = "icons/ranks/ace.png"
 
 ---
 
-## AI Scripts — Lua 5.5
+## Entity Definition TOML
 
-```lua
--- ai/interceptor.lua
-local function patrol(self)
-  ai.fly_waypoints(self, self.waypoints)
-  while true do
-    local threat = ai.scan_threats(self, range_nm(40))
-    if threat then
-      ai.radio(self, "BANDIT", threat)
-      return engage(self, threat)
-    end
-    coroutine.yield()
-  end
-end
+Controls what an entity is: its mesh, HP, damage model, flight physics, and optional default
+Lua AI script. Place entity definition files anywhere in the pack directory (typically
+`entities/<name>.toml`) and register them via the server's mod loader.
 
-local function engage(self, target)
-  ai.set_afterburner(self, true)
-  while ai.in_range(self, target, range_nm(10)) == false do
-    ai.fly_to(self, ai.position(target))
-    coroutine.yield()
-  end
-  ai.fire_missile(self, target, "aim120c")
-  return patrol(self)
-end
+**Required fields:**
 
-return { init = patrol }
+| Field      | Type   | Description                                             |
+|------------|--------|---------------------------------------------------------|
+| `id`       | string | Pack-scoped identifier, e.g. `fl-base:f15c`            |
+| `name`     | string | Human-readable display name                             |
+| `category` | string | `air_vehicle`, `ground_vehicle`, `naval`, `projectile`, `structure` |
+| `max_hp`   | float  | Maximum hit points                                      |
+
+**Optional fields:**
+
+| Field               | Type   | Default | Description                                                |
+|---------------------|--------|---------|------------------------------------------------------------|
+| `mesh`              | string | `""`    | Primary glTF asset name (renderer)                         |
+| `classic_damage_mesh` | string | `""` | Battle-damaged glTF variant (renderer)                     |
+| `flight_model`      | string | `""`    | Flight model TOML asset name; empty = builtin UFO model (server-side only) |
+| `ai_script`         | string | `""`    | Lua AI script name from the pack's `ai/` directory; auto-assigned when spawned without `--ai`; empty = no scripted AI (server-side only) |
+
+**Example:**
+
+```toml
+[entity]
+id           = "fl-base:f15c"
+name         = "F-15C Eagle"
+category     = "air_vehicle"
+max_hp       = 300.0
+mesh         = "aircraft/f15c"
+flight_model = "flight/f15c"
+ai_script    = "f15c_patrol"
+
+[damage.light]
+hp_fraction    = 0.70
+visual_effect  = "smoke_light"
+thrust_factor  = 0.85
+control_factor = 0.95
+
+[damage.heavy]
+hp_fraction    = 0.35
+visual_effect  = "smoke_heavy"
+thrust_factor  = 0.60
+control_factor = 0.75
+
+[damage.critical]
+hp_fraction      = 0.10
+visual_effect    = "fire"
+thrust_factor    = 0.10
+control_factor   = 0.30
+avionics_failure = true
+
+[classic]
+damage_mesh = "aircraft/f15c_dmg"
 ```
 
-Each AI entity runs one or more Lua coroutines. The engine resumes them each sim tick. Behaviors can yield, stack, and interrupt cleanly.
+---
 
-> **Lua 5.5 note:** `global` is a reserved keyword in Lua 5.5. Scripts that use `global` as a variable name will fail to load. Rename any such variables before shipping a pack targeting this engine version.
+## AI Scripts — Lua 5.5
+
+AI scripts are Lua 5.5 source files placed in the pack's `ai/` directory. The engine calls
+`compute_control(state, tick, dt)` each sim tick (60 Hz) and uses the returned table of
+control inputs to drive the entity's flight integrator.
+
+**File location:** `ai/<name>.lua` inside the content pack directory.  
+**Function required:** `function compute_control(state, tick, dt) → table`
+
+See [`docs/modding/ai.md`](../ai.md) for the complete API reference including the `state`
+table fields, `guidance.*` math module, `nearby_entities()`, `get_entity()`, and worked
+examples.
+
+> **Lua 5.5 note:** `global` is a reserved keyword in Lua 5.5. Scripts that use `global`
+> as a variable name will fail to load. Rename any such variables before shipping a pack
+> targeting this engine version.

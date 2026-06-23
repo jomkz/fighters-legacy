@@ -449,6 +449,18 @@ int main(int argc, char** argv) {
     // Declared here so rconServer outlives gameLoop but is destroyed before adminRegistry.
     std::unique_ptr<RconServer> rconServer;
 
+    // Build a read-only AI script cache before gameLoop.start() so it is safe to read
+    // from any thread (including the sim thread for ENet admin commands).
+    std::unordered_map<std::string, std::pair<std::string, std::string>> aiScriptCache;
+    for (const auto& name : assets.listAssets(AssetType::AIScript)) {
+        auto script = assets.loadAIScript(name.c_str());
+        if (!script || script->bytes.empty())
+            continue;
+        std::string src(script->bytes.begin(), script->bytes.end());
+        std::string root = assets.findPackRootForAsset(AssetType::AIScript, name.c_str());
+        aiScriptCache.emplace(name, std::pair<std::string, std::string>{std::move(src), std::move(root)});
+    }
+
     GameLoop gameLoop(broadcaster, *log);
     ServerCommandContext adminCtx;
     adminCtx.sim.broadcaster = &broadcaster;
@@ -460,6 +472,10 @@ int main(int argc, char** argv) {
     adminCtx.env.logger = log;
     adminCtx.env.configPath = &configPath;
     adminCtx.env.quitFlag = &g_quit;
+    adminCtx.env.loadAIScript = [&aiScriptCache](std::string_view name) -> std::pair<std::string, std::string> {
+        auto it = aiScriptCache.find(std::string(name));
+        return (it != aiScriptCache.end()) ? it->second : std::pair<std::string, std::string>{};
+    };
     adminCtx.bans.banlistPath = cfg.banlistPath.empty() ? nullptr : &cfg.banlistPath;
     adminCtx.bans.allowlistPath = cfg.allowlistPath.empty() ? nullptr : &cfg.allowlistPath;
     adminCtx.bans.saveBanlist = [&](const std::unordered_set<std::string>& b) {

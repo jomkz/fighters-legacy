@@ -9,6 +9,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **engine**: `LuaController` — `IEntityController` backed by a sandboxed Lua 5.5 script;
+  exposes entity state, `guidance.*` math, `nearby_entities()`, and `get_entity()` to scripts;
+  per-entity Lua state persists between ticks for stateful behaviors (#359).
+- **engine**: `EntityDef.aiScriptId` — content packs can specify a default Lua AI script per
+  entity type via `ai_script` in entity TOML; auto-assigned when spawning without `--ai` (#359).
+- **server**: `spawn --ai lua <name>` admin command — spawn entities with a Lua AI controller
+  loaded from the content pack's `ai/` directory; works from stdin and ENet admin channels (#359).
+- **engine**: `AssetManager::findPackRootForAsset()` — locates the owning content pack's root
+  directory for a given asset, used to configure `require()` in `LuaController` (#359).
+- **engine**: `AssetManager::listAssets(AssetType)` — generic asset listing across all packs
+  (replaces the mission-specific internal implementation of `listMissions()`).
+- **docs**: `docs/modding/ai.md` — complete Lua AI scripting API reference (Phase 3 acceptance
+  criterion); documents `compute_control`, `guidance.*`, `nearby_entities`, `get_entity`, and
+  includes worked loiter and proximity-pursuit examples (#359, partially addresses #185).
+
 - **engine,game**: Add `WeatherPreset::Snow` (5) and `WeatherPreset::Blizzard` (6); snow is now
   server-authoritative and altitude-independent (#269). Replaces the client-side altitude proxy
   from #265 with explicit precipitation type propagated via `MsgWeatherState.preset`. Adds
