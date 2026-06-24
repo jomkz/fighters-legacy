@@ -18,7 +18,7 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir  = $PSScriptRoot
 $RepoRoot   = (Resolve-Path (Join-Path $ScriptDir "..\..")).Path
-if (-not $BuildDir) { $BuildDir = Join-Path $RepoRoot "build\debug" }
+if (-not $BuildDir) { $BuildDir = Join-Path $RepoRoot "build\debug-msvc" }
 $ResultsDir = Join-Path $ScriptDir "results"
 $Timestamp  = (Get-Date -Format "yyyyMMddTHHmmssZ")
 $Report     = Join-Path $ResultsDir "windows_$Timestamp.json"
@@ -29,7 +29,7 @@ $BenchRate    = 60
 New-Item -ItemType Directory -Force -Path $ResultsDir | Out-Null
 
 $FlServer = Join-Path $BuildDir "server\fl-server\fl-server.exe"
-$NetChk   = Join-Path $BuildDir "tools\net_check\net_check.exe"
+$NetChk   = Join-Path $BuildDir "tools\net_check.exe"
 if (-not (Test-Path $FlServer)) {
     Write-Error "fl-server not found: $FlServer`nBuild first: cmake --build --preset debug-msvc"
 }

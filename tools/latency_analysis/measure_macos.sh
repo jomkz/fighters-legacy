@@ -26,7 +26,7 @@ BENCH_RATE=60
 mkdir -p "$RESULTS_DIR"
 
 FLSERVER="$BUILD_DIR/server/fl-server/fl-server"
-NETCHK="$BUILD_DIR/tools/net_check/net_check"
+NETCHK="$BUILD_DIR/tools/net_check"
 [[ -x "$FLSERVER" ]] || { echo "ERROR: fl-server not found at $FLSERVER"; echo "Build first: cmake --build --preset debug"; exit 1; }
 [[ -x "$NETCHK"  ]] || { echo "ERROR: net_check not found at $NETCHK";  exit 1; }
 

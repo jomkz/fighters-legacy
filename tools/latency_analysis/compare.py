@@ -54,7 +54,7 @@ def _load_results(results_dir):
             continue
         path = os.path.join(results_dir, fname)
         try:
-            with open(path, encoding="utf-8") as f:
+            with open(path, encoding="utf-8-sig") as f:
                 data = json.load(f)
             results.append((fname, data))
         except (json.JSONDecodeError, OSError):
