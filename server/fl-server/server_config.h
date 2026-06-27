@@ -42,6 +42,9 @@ struct ServerConfig {
     double drawDistanceKm = 200.0;        // per-peer interest radius (km); [1, 100000]
     uint32_t baselineIntervalTicks = 120; // full-snapshot baseline interval (sim ticks); [1, 3600]
     uint32_t jitterBufferDepth = 4;       // per-peer input queue depth (ticks); [1, 32]
+    uint32_t jitterAdaptWindow = 60;      // EWMA smoothing window in ticks; [10, 3600]
+    uint32_t jitterHysteresis = 2;        // resize dead-band in ticks; [0, 8]
+    float jitterMultiplier = 2.0f;        // k factor: depth = ceil(ewma + k*jitter); [0.0, 8.0]
 
     // [ai]  — Phase 2: parsed and stored; enforcement lands with AI runtime
     std::string aiDifficultyFloor = "recruit";

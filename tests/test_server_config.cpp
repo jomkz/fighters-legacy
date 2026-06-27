@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mock_hal.h"
 #include "server_config.h"
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <string>
 #include <vector>
@@ -51,6 +52,9 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.drawDistanceKm == 200.0);
     CHECK(cfg.baselineIntervalTicks == 120u);
     CHECK(cfg.jitterBufferDepth == 4u);
+    CHECK(cfg.jitterAdaptWindow == 60u);
+    CHECK(cfg.jitterHysteresis == 2u);
+    CHECK(cfg.jitterMultiplier == Catch::Approx(2.0f));
     CHECK(log.entries.empty());
 }
 
@@ -299,15 +303,21 @@ TEST_CASE("parseServerConfig: reads [world] fields", "[server_config]") {
     MockLogger log;
     auto cfg = parseServerConfig(R"(
 [world]
-save_path              = "/data/world.sav"
-autosave_interval_s    = 600
-jitter_buffer_depth    = 8
+save_path                     = "/data/world.sav"
+autosave_interval_s           = 600
+jitter_buffer_depth           = 8
+jitter_buffer_adapt_window    = 90
+jitter_buffer_hysteresis      = 3
+jitter_buffer_jitter_multiplier = 1.5
 )",
                                  &log);
 
     CHECK(cfg.worldSavePath == "/data/world.sav");
     CHECK(cfg.worldAutosaveIntervalS == 600);
     CHECK(cfg.jitterBufferDepth == 8u);
+    CHECK(cfg.jitterAdaptWindow == 90u);
+    CHECK(cfg.jitterHysteresis == 3u);
+    CHECK(cfg.jitterMultiplier == Catch::Approx(1.5f));
     CHECK(log.entries.empty());
 }
 
@@ -795,4 +805,114 @@ TEST_CASE("parseServerConfig: idle_timeout_s 86401 warns and keeps 0", "[server_
     auto cfg = parseServerConfig("[security]\nidle_timeout_s = 86401\n", &log);
     CHECK(cfg.idleTimeoutS == 0);
     CHECK(log.hasMessage(LogLevel::Warn, "idle_timeout_s out of range"));
+}
+
+// ---------------------------------------------------------------------------
+// Adaptive jitter buffer config tests (#424 + #429)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("parseServerConfig: reads world.jitter_buffer_adapt_window", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_adapt_window = 90\n", &log);
+    CHECK(cfg.jitterAdaptWindow == 90u);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: jitter_buffer_adapt_window below 10 warns and uses default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_adapt_window = 9\n", &log);
+    CHECK(cfg.jitterAdaptWindow == 60u);
+    CHECK(log.hasMessage(LogLevel::Warn, "jitter_buffer_adapt_window"));
+}
+
+TEST_CASE("parseServerConfig: jitter_buffer_adapt_window above 3600 warns and uses default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_adapt_window = 3601\n", &log);
+    CHECK(cfg.jitterAdaptWindow == 60u);
+    CHECK(log.hasMessage(LogLevel::Warn, "jitter_buffer_adapt_window"));
+}
+
+TEST_CASE("parseServerConfig: jitter_buffer_adapt_window boundary 10 accepted", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_adapt_window = 10\n", &log);
+    CHECK(cfg.jitterAdaptWindow == 10u);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: jitter_buffer_adapt_window boundary 3600 accepted", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_adapt_window = 3600\n", &log);
+    CHECK(cfg.jitterAdaptWindow == 3600u);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: reads world.jitter_buffer_hysteresis", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_hysteresis = 3\n", &log);
+    CHECK(cfg.jitterHysteresis == 3u);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: jitter_buffer_hysteresis above 8 warns and uses default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_hysteresis = 9\n", &log);
+    CHECK(cfg.jitterHysteresis == 2u);
+    CHECK(log.hasMessage(LogLevel::Warn, "jitter_buffer_hysteresis"));
+}
+
+TEST_CASE("parseServerConfig: jitter_buffer_hysteresis boundary 0 accepted", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_hysteresis = 0\n", &log);
+    CHECK(cfg.jitterHysteresis == 0u);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: jitter_buffer_hysteresis boundary 8 accepted", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_hysteresis = 8\n", &log);
+    CHECK(cfg.jitterHysteresis == 8u);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: reads world.jitter_buffer_jitter_multiplier", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_jitter_multiplier = 1.5\n", &log);
+    CHECK(cfg.jitterMultiplier == Catch::Approx(1.5f));
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: jitter_buffer_jitter_multiplier negative warns and uses default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_jitter_multiplier = -0.1\n", &log);
+    CHECK(cfg.jitterMultiplier == Catch::Approx(2.0f));
+    CHECK(log.hasMessage(LogLevel::Warn, "jitter_buffer_jitter_multiplier"));
+}
+
+TEST_CASE("parseServerConfig: jitter_buffer_jitter_multiplier above 8.0 warns and uses default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_jitter_multiplier = 8.1\n", &log);
+    CHECK(cfg.jitterMultiplier == Catch::Approx(2.0f));
+    CHECK(log.hasMessage(LogLevel::Warn, "jitter_buffer_jitter_multiplier"));
+}
+
+TEST_CASE("parseServerConfig: jitter_buffer_jitter_multiplier boundary 0.0 accepted", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_jitter_multiplier = 0.0\n", &log);
+    CHECK(cfg.jitterMultiplier == Catch::Approx(0.0f));
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: jitter_buffer_jitter_multiplier boundary 8.0 accepted", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\njitter_buffer_jitter_multiplier = 8.0\n", &log);
+    CHECK(cfg.jitterMultiplier == Catch::Approx(8.0f));
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: adaptive jitter defaults are correct", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("", &log);
+    CHECK(cfg.jitterAdaptWindow == 60u);
+    CHECK(cfg.jitterHysteresis == 2u);
+    CHECK(cfg.jitterMultiplier == Catch::Approx(2.0f));
 }

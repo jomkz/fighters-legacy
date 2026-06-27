@@ -9,6 +9,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **network**: adaptive per-peer jitter buffer resizing — EWMA of one-way delay + RFC 3550 inter-arrival jitter estimator continuously drive `JitterBuffer::setMaxDepth()` via `[world].jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, and `jitter_buffer_jitter_multiplier`; hot-reloadable via `reload_config` (#424, #429)
+- **network**: `WorldBroadcaster::forEachPeer` callback now receives a `PeerInfo` struct, adding `bufferMaxDepth`, `ewmaDelayTicks`, and `ewmaJitterTicks` fields alongside existing fields
+- **network**: `peers` admin command output extended to show EWMA delay, jitter estimate, and buffer max depth
 - **ai**: `patrol_attack` and `escort` StateMachineController templates in AiControllerFactory (#430)
 - **ai**: LagPursuitController for guns employment on turning targets; completes the pursuit triangle alongside pure pursuit and `LeadPursuitController` (#432)
 

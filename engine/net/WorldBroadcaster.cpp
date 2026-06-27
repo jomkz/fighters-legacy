@@ -259,6 +259,9 @@ void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
     setDrawDistance(cfg.drawDistanceKm);
     setBaselineInterval(cfg.baselineIntervalTicks);
     setJitterBufferDepth(cfg.jitterBufferMaxDepth);
+    setJitterAdaptWindow(cfg.jitterAdaptWindow);
+    setJitterHysteresis(cfg.jitterHysteresis);
+    setJitterMultiplier(cfg.jitterMultiplier);
 }
 
 void WorldBroadcaster::setIdleTimeout(int timeoutSeconds) noexcept {
@@ -277,18 +280,34 @@ void WorldBroadcaster::setJitterBufferDepth(uint32_t maxDepth) noexcept {
     m_jitterMaxDepth.store(maxDepth == 0u ? 1u : maxDepth, std::memory_order_relaxed);
 }
 
-void WorldBroadcaster::forEachPeer(std::function<void(uint32_t peerId, const std::string& addr, EntityId eid,
-                                                      uint32_t delayTicks, uint32_t queueDepth)>
-                                       fn) const {
+void WorldBroadcaster::setJitterAdaptWindow(uint32_t ticks) noexcept {
+    m_jitterAdaptWindow = (ticks == 0u ? 1u : ticks);
+}
+
+void WorldBroadcaster::setJitterHysteresis(uint32_t ticks) noexcept {
+    m_jitterHysteresis = ticks;
+}
+
+void WorldBroadcaster::setJitterMultiplier(float k) noexcept {
+    m_jitterMultiplier = (k < 0.f ? 0.f : k);
+}
+
+void WorldBroadcaster::forEachPeer(std::function<void(const PeerInfo&)> fn) const {
     for (const auto& [peerId, eid] : m_peerEntities) {
+        PeerInfo pi;
+        pi.peerId = peerId;
+        pi.eid = eid;
         const char* raw = m_net.getPeerAddress(peerId);
-        std::string addr = raw ? raw : "";
-        uint32_t delay = 0, queueDepth = 0;
+        pi.addr = raw ? raw : "";
         if (auto it = m_peerInputs.find(peerId); it != m_peerInputs.end()) {
-            delay = it->second.estimatedDelayTicks;
-            queueDepth = it->second.jitterBuffer.size();
+            const PeerInputState& ps = it->second;
+            pi.delayTicks = ps.estimatedDelayTicks;
+            pi.queueDepth = ps.jitterBuffer.size();
+            pi.bufferMaxDepth = ps.jitterBuffer.maxDepth();
+            pi.ewmaDelayTicks = ps.ewmaDelayTicks;
+            pi.ewmaJitterTicks = ps.ewmaJitterTicks;
         }
-        fn(peerId, addr, eid, delay, queueDepth);
+        fn(pi);
     }
 }
 
@@ -371,6 +390,27 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             ps.aileron = bi.aileron;
             ps.rudder = bi.rudder;
             ps.buttons = bi.buttons;
+        }
+    }
+
+    // Adaptive jitter buffer resize: for each peer with a seeded EWMA, compute the target depth
+    // from the delay EWMA and inter-arrival jitter EWMA, then resize if outside the hysteresis band.
+    // Runs O(P) float comparisons per tick — negligible at max 32 peers × 60 Hz.
+    {
+        const uint32_t globalMax = m_jitterMaxDepth.load(std::memory_order_relaxed);
+        const float k = m_jitterMultiplier;
+        const uint32_t hysteresis = m_jitterHysteresis;
+        for (auto& [peerId, ps] : m_peerInputs) {
+            if (!ps.ewmaSeeded)
+                continue;
+            const float targetF =
+                std::clamp(ps.ewmaDelayTicks + k * ps.ewmaJitterTicks, 1.0f, static_cast<float>(globalMax));
+            const uint32_t target = static_cast<uint32_t>(std::ceil(targetF));
+            const uint32_t current = ps.jitterBuffer.maxDepth();
+            const bool shouldGrow = (target > current && target - current > hysteresis);
+            const bool shouldShrink = (current > target && current - target > hysteresis);
+            if (shouldGrow || shouldShrink)
+                ps.jitterBuffer.setMaxDepth(target);
         }
     }
 
@@ -799,6 +839,27 @@ void WorldBroadcaster::onReceive(uint32_t peerId, const void* data, std::size_t 
             const uint32_t maxD = m_jitterMaxDepth.load(std::memory_order_relaxed);
             const uint32_t depth = (stored.estimatedDelayTicks > 0u) ? std::min(stored.estimatedDelayTicks, maxD) : 1u;
             stored.jitterBuffer.setMaxDepth(depth);
+        }
+
+        // Update per-peer EWMA of one-way delay and inter-arrival jitter.
+        // alpha = 1/adaptWindow; seeded on first packet, updated on each subsequent accepted input.
+        {
+            const float alpha = 1.0f / static_cast<float>(m_jitterAdaptWindow);
+            if (!stored.ewmaSeeded) {
+                stored.ewmaDelayTicks = static_cast<float>(stored.estimatedDelayTicks);
+                stored.ewmaJitterTicks = 0.f;
+                stored.lastInputTick = m_currentTick;
+                stored.ewmaSeeded = true;
+            } else {
+                stored.ewmaDelayTicks =
+                    alpha * static_cast<float>(stored.estimatedDelayTicks) + (1.f - alpha) * stored.ewmaDelayTicks;
+                // RFC 3550 inter-arrival jitter: expected spacing is 1 tick (60 Hz client send rate).
+                const uint64_t interArrival =
+                    (m_currentTick > stored.lastInputTick) ? m_currentTick - stored.lastInputTick : 0u;
+                const float deviation = std::abs(static_cast<float>(interArrival) - 1.f);
+                stored.ewmaJitterTicks = alpha * deviation + (1.f - alpha) * stored.ewmaJitterTicks;
+                stored.lastInputTick = m_currentTick;
+            }
         }
 
         stored.lastSeqNum = msg.seqNum;

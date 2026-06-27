@@ -193,19 +193,20 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
 
     // peers
     registry.registerCommand(
-        "peers",
-        "peers  -- list connected peers (peerId, address, entity index/generation, one-way delay, input queue depth)",
+        "peers", "peers  -- list connected peers (peerId, address, entity, delay, EWMA delay, jitter, buf fill/max)",
         [ctx](std::span<std::string_view>) -> std::string {
             if (!ctx.sim.broadcaster || !ctx.sim.gameLoop)
                 return "peers: not available";
             ctx.sim.gameLoop->enqueueSimCallback([ctx]() {
                 int count = 0;
-                ctx.sim.broadcaster->forEachPeer([&](uint32_t peerId, const std::string& addr, fl::EntityId eid,
-                                                     uint32_t delayTicks, uint32_t queueDepth) {
-                    char m[256];
-                    std::snprintf(m, sizeof(m), "[admin] peer %u  %s  entity=%u/%u  delay=%ut (~%ums)  q=%u", peerId,
-                                  addr.c_str(), eid.index, eid.generation, delayTicks, (delayTicks * 1000u + 30u) / 60u,
-                                  queueDepth);
+                ctx.sim.broadcaster->forEachPeer([&](const fl::PeerInfo& pi) {
+                    char m[320];
+                    std::snprintf(m, sizeof(m),
+                                  "[admin] peer %u  %s  entity=%u/%u  delay=%ut (~%ums)"
+                                  "  ewma=%.1ft  jitter=%.1ft  buf=%u/%u",
+                                  pi.peerId, pi.addr.c_str(), pi.eid.index, pi.eid.generation, pi.delayTicks,
+                                  (pi.delayTicks * 1000u + 30u) / 60u, pi.ewmaDelayTicks, pi.ewmaJitterTicks,
+                                  pi.queueDepth, pi.bufferMaxDepth);
                     std::printf("%s\n", m);
                     if (ctx.rcon.shell)
                         ctx.rcon.shell->print(m);
@@ -253,10 +254,9 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                      std::string ip = normalizeIp(arg);
                                      ctx.sim.gameLoop->enqueueSimCallback([ctx, ip]() {
                                          int kicked = 0;
-                                         ctx.sim.broadcaster->forEachPeer([&](uint32_t peerId, const std::string& addr,
-                                                                              fl::EntityId, uint32_t, uint32_t) {
-                                             if (extractIp(addr) == ip) {
-                                                 ctx.sim.broadcaster->kickPeer(peerId);
+                                         ctx.sim.broadcaster->forEachPeer([&](const fl::PeerInfo& pi) {
+                                             if (extractIp(pi.addr) == ip) {
+                                                 ctx.sim.broadcaster->kickPeer(pi.peerId);
                                                  ++kicked;
                                              }
                                          });
@@ -287,10 +287,9 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                                          return "ban: invalid peer ID";
                                      ctx.sim.gameLoop->enqueueSimCallback([ctx, peerId]() {
                                          std::string foundIp;
-                                         ctx.sim.broadcaster->forEachPeer([&](uint32_t pid, const std::string& addr,
-                                                                              fl::EntityId, uint32_t, uint32_t) {
-                                             if (pid == peerId)
-                                                 foundIp = extractIp(addr);
+                                         ctx.sim.broadcaster->forEachPeer([&](const fl::PeerInfo& pi) {
+                                             if (pi.peerId == peerId)
+                                                 foundIp = extractIp(pi.addr);
                                          });
                                          char m[128];
                                          if (foundIp.empty()) {
@@ -690,7 +689,8 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
     registry.registerCommand(
         "reload_config",
         "reload_config  -- re-read server.toml and apply: name (beacon), motd, motd_display_s,"
-        " draw_distance_km, baseline_interval_ticks, jitter_buffer_depth (other fields require restart)",
+        " draw_distance_km, baseline_interval_ticks, jitter_buffer_depth, jitter_buffer_adapt_window,"
+        " jitter_buffer_hysteresis, jitter_buffer_jitter_multiplier (other fields require restart)",
         [ctx](std::span<std::string_view>) -> std::string {
             if (!ctx.env.configPath || ctx.env.configPath->empty())
                 return "reload_config: not available";
@@ -708,20 +708,30 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                 auto newDraw = static_cast<float>(newCfg.drawDistanceKm);
                 auto newBaseline = newCfg.baselineIntervalTicks;
                 auto newJitterDepth = newCfg.jitterBufferDepth;
-                ctx.sim.gameLoop->enqueueSimCallback(
-                    [ctx, newMotd, newMotdDisplayS, newDraw, newBaseline, newJitterDepth]() mutable {
-                        ctx.sim.broadcaster->setMotd(std::move(newMotd));
-                        ctx.sim.broadcaster->setMotdDisplaySeconds(newMotdDisplayS);
-                        ctx.sim.broadcaster->setDrawDistance(newDraw);
-                        ctx.sim.broadcaster->setBaselineInterval(newBaseline);
-                        ctx.sim.broadcaster->setJitterBufferDepth(newJitterDepth);
-                    });
+                auto newAdaptWindow = newCfg.jitterAdaptWindow;
+                auto newHysteresis = newCfg.jitterHysteresis;
+                auto newMultiplier = newCfg.jitterMultiplier;
+                ctx.sim.gameLoop->enqueueSimCallback([ctx, newMotd, newMotdDisplayS, newDraw, newBaseline,
+                                                      newJitterDepth, newAdaptWindow, newHysteresis,
+                                                      newMultiplier]() mutable {
+                    ctx.sim.broadcaster->setMotd(std::move(newMotd));
+                    ctx.sim.broadcaster->setMotdDisplaySeconds(newMotdDisplayS);
+                    ctx.sim.broadcaster->setDrawDistance(newDraw);
+                    ctx.sim.broadcaster->setBaselineInterval(newBaseline);
+                    ctx.sim.broadcaster->setJitterBufferDepth(newJitterDepth);
+                    ctx.sim.broadcaster->setJitterAdaptWindow(newAdaptWindow);
+                    ctx.sim.broadcaster->setJitterHysteresis(newHysteresis);
+                    ctx.sim.broadcaster->setJitterMultiplier(newMultiplier);
+                });
             }
             return "reload_config: name=\"" + newCfg.name + "\"  motd=\"" + newCfg.motd +
                    "\"  motd_display_s=" + std::to_string(newCfg.motdDisplayS) +
                    "  draw_distance_km=" + std::to_string(newCfg.drawDistanceKm) +
                    "  baseline_interval_ticks=" + std::to_string(newCfg.baselineIntervalTicks) +
                    "  jitter_buffer_depth=" + std::to_string(newCfg.jitterBufferDepth) +
+                   "  jitter_buffer_adapt_window=" + std::to_string(newCfg.jitterAdaptWindow) +
+                   "  jitter_buffer_hysteresis=" + std::to_string(newCfg.jitterHysteresis) +
+                   "  jitter_buffer_jitter_multiplier=" + std::to_string(newCfg.jitterMultiplier) +
                    "  (other fields require restart)";
         });
 
