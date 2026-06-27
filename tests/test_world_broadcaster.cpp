@@ -1200,8 +1200,7 @@ TEST_CASE("WorldBroadcaster: onReceive computes estimatedDelayTicks from tickInd
     broadcaster.onReceive(0u, &inp, sizeof(inp));
 
     uint32_t gotDelay = 0xFFFFFFFFu;
-    broadcaster.forEachPeer(
-        [&](uint32_t, const std::string&, fl::EntityId, uint32_t delayTicks, uint32_t) { gotDelay = delayTicks; });
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { gotDelay = pi.delayTicks; });
     CHECK(gotDelay == 5u);
 }
 
@@ -1227,8 +1226,7 @@ TEST_CASE("WorldBroadcaster: onReceive future tickIndex does not update estimate
     broadcaster.onReceive(0u, &inp, sizeof(inp));
 
     uint32_t gotDelay = 0xFFFFFFFFu;
-    broadcaster.forEachPeer(
-        [&](uint32_t, const std::string&, fl::EntityId, uint32_t delayTicks, uint32_t) { gotDelay = delayTicks; });
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { gotDelay = pi.delayTicks; });
     // estimatedDelayTicks stays at its initialized value of 0 (no underflow).
     CHECK(gotDelay == 0u);
 }
@@ -1434,7 +1432,8 @@ TEST_CASE("WorldBroadcaster: forEachPeer calls fn for each connected peer", "[wo
     broadcaster.onConnect(1u);
 
     int callCount = 0;
-    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId eid, uint32_t, uint32_t) {
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) {
+        fl::EntityId eid = pi.eid;
         CHECK(eid.valid());
         ++callCount;
     });
@@ -1449,7 +1448,7 @@ TEST_CASE("WorldBroadcaster: forEachPeer with no connected peers does not call f
     fl::WorldBroadcaster broadcaster(em, registry, net, logger);
 
     int callCount = 0;
-    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId, uint32_t, uint32_t) { ++callCount; });
+    broadcaster.forEachPeer([&](const fl::PeerInfo&) { ++callCount; });
     CHECK(callCount == 0);
 }
 
@@ -4934,8 +4933,7 @@ TEST_CASE("WorldBroadcaster: received input is buffered and not applied until ti
 
     // Buffer should hold 1 item before any tick drains it.
     uint32_t gotDepth = 0u;
-    broadcaster.forEachPeer(
-        [&](uint32_t, const std::string&, fl::EntityId, uint32_t, uint32_t queueDepth) { gotDepth = queueDepth; });
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { gotDepth = pi.queueDepth; });
     CHECK(gotDepth == 1u);
 }
 
@@ -4960,14 +4958,13 @@ TEST_CASE("WorldBroadcaster: jitter buffer drains one per tick", "[world_broadca
 
     for (uint32_t expected = 3u; expected > 0u; --expected) {
         uint32_t gotDepth = 0xFFu;
-        broadcaster.forEachPeer(
-            [&](uint32_t, const std::string&, fl::EntityId, uint32_t, uint32_t q) { gotDepth = q; });
+        broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { gotDepth = pi.queueDepth; });
         CHECK(gotDepth == expected);
         broadcaster.onTick(1.0 / 60.0, expected);
     }
     // After 3 ticks the buffer is empty.
     uint32_t finalDepth = 0xFFu;
-    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId, uint32_t, uint32_t q) { finalDepth = q; });
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { finalDepth = pi.queueDepth; });
     CHECK(finalDepth == 0u);
 }
 
@@ -4990,7 +4987,7 @@ TEST_CASE("WorldBroadcaster: empty buffer tick uses stale repeat without crash",
     broadcaster.onTick(1.0 / 60.0, 2u);
 
     fl::EntityId eid;
-    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId e, uint32_t, uint32_t) { eid = e; });
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { eid = pi.eid; });
     CHECK(eid.valid());
 }
 
@@ -5013,7 +5010,7 @@ TEST_CASE("WorldBroadcaster: forEachPeer reports queueDepth", "[world_broadcaste
     broadcaster.onReceive(0u, &i2, sizeof(i2));
 
     uint32_t gotDepth = 0u;
-    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId, uint32_t, uint32_t q) { gotDepth = q; });
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { gotDepth = pi.queueDepth; });
     CHECK(gotDepth == 2u);
 }
 
@@ -5043,7 +5040,7 @@ TEST_CASE("WorldBroadcaster: jitter buffer depth seeded from estimatedDelayTicks
     }
     // Buffer should hold exactly 5 (depth cap).
     uint32_t gotDepth = 0u;
-    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId, uint32_t, uint32_t q) { gotDepth = q; });
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { gotDepth = pi.queueDepth; });
     CHECK(gotDepth == 5u);
 }
 
@@ -5072,7 +5069,7 @@ TEST_CASE("WorldBroadcaster: jitter buffer depth capped at jitterMaxDepth", "[wo
     broadcaster.onReceive(0u, &i3, sizeof(i3)); // overflow
 
     uint32_t gotDepth = 0u;
-    broadcaster.forEachPeer([&](uint32_t, const std::string&, fl::EntityId, uint32_t, uint32_t q) { gotDepth = q; });
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { gotDepth = pi.queueDepth; });
     CHECK(gotDepth == 2u);
 }
 
@@ -5101,8 +5098,7 @@ TEST_CASE("WorldBroadcaster: jitter buffers are independent per peer", "[world_b
     broadcaster.onReceive(1u, &b1, sizeof(b1));
 
     std::map<uint32_t, uint32_t> depths;
-    broadcaster.forEachPeer(
-        [&](uint32_t peerId, const std::string&, fl::EntityId, uint32_t, uint32_t q) { depths[peerId] = q; });
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { depths[pi.peerId] = pi.queueDepth; });
     CHECK(depths[0u] == 2u);
     CHECK(depths[1u] == 1u);
 }
@@ -5147,10 +5143,491 @@ TEST_CASE("WorldBroadcaster: setJitterBufferDepth affects initial depth for new 
     }
 
     std::map<uint32_t, uint32_t> depths;
-    broadcaster.forEachPeer(
-        [&](uint32_t peerId, const std::string&, fl::EntityId, uint32_t, uint32_t q) { depths[peerId] = q; });
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { depths[pi.peerId] = pi.queueDepth; });
     // Peer 0 was seeded with depth=6 before the change.
     CHECK(depths[0u] == 6u);
     // Peer 1 was seeded with depth=3 after the change.
     CHECK(depths[1u] == 3u);
+}
+
+// ---------------------------------------------------------------------------
+// Adaptive jitter buffer tests (#424 + #429)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("WorldBroadcaster: EWMA delay seeded from first estimatedDelayTicks", "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterBufferDepth(32u);
+    broadcaster.setJitterAdaptWindow(2u); // alpha=0.5, fast convergence
+    broadcaster.setJitterHysteresis(0u);  // resize on any diff
+    broadcaster.setJitterMultiplier(0.f); // delay-only
+    broadcaster.onConnect(0u);
+
+    // Advance to tick 6 so first input delay = 6 - 1 = 5.
+    broadcaster.onTick(1.0 / 60.0, 6u);
+    clearSnapshots(net);
+
+    auto inp = makeJitterInput(1u, 0.5f, 1u);
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    // After seeding: EWMA = 5, depth = 5. Verify via forEachPeer.
+    float gotEwma = -1.f;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { gotEwma = pi.ewmaDelayTicks; });
+    CHECK(gotEwma == Catch::Approx(5.f));
+}
+
+TEST_CASE("WorldBroadcaster: EWMA delay converges toward new samples", "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterBufferDepth(32u);
+    broadcaster.setJitterAdaptWindow(2u); // alpha=0.5
+    broadcaster.setJitterHysteresis(0u);
+    broadcaster.setJitterMultiplier(0.f);
+    broadcaster.onConnect(0u);
+
+    // Seed at delay=2 (tick=3, tickIndex=1).
+    broadcaster.onTick(1.0 / 60.0, 3u);
+    clearSnapshots(net);
+    auto inp0 = makeJitterInput(1u, 0.5f, 1u);
+    broadcaster.onReceive(0u, &inp0, sizeof(inp0));
+
+    // Send many inputs at delay=20 (tickIndex=0, server still at tick 3 after onTick above).
+    // EWMA update: tick stays at 3 but subsequent inputs use seqNums to track.
+    // Send more inputs advancing server to tick 23 so delay = 23 - 1 = 22 each time.
+    for (uint32_t seq = 2u; seq <= 12u; ++seq) {
+        broadcaster.onTick(1.0 / 60.0, static_cast<uint64_t>(3u + seq));
+        clearSnapshots(net);
+        auto inp = makeJitterInput(seq, 0.5f, 1u); // tickIndex=1, delay grows with server tick
+        broadcaster.onReceive(0u, &inp, sizeof(inp));
+    }
+
+    // After 10 updates at large delay, EWMA has moved well above 2.
+    float gotEwma = -1.f;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { gotEwma = pi.ewmaDelayTicks; });
+    CHECK(gotEwma > 5.f); // well above initial seed
+}
+
+TEST_CASE("WorldBroadcaster: adaptive resize grows buffer when EWMA delay increases",
+          "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterBufferDepth(32u);
+    broadcaster.setJitterAdaptWindow(2u); // alpha=0.5, 8 samples for ~99% convergence
+    broadcaster.setJitterHysteresis(0u);
+    broadcaster.setJitterMultiplier(0.f);
+    broadcaster.onConnect(0u);
+
+    // Seed at delay=2 (depth=2).
+    broadcaster.onTick(1.0 / 60.0, 3u);
+    clearSnapshots(net);
+    auto inp0 = makeJitterInput(1u, 0.5f, 1u);
+    broadcaster.onReceive(0u, &inp0, sizeof(inp0));
+    broadcaster.onTick(1.0 / 60.0, 4u); // resize check: target=2, current=2, no resize
+    clearSnapshots(net);
+
+    // Now send inputs at high delay (tickIndex=0 so delay = serverTick - 0 = serverTick).
+    // With alpha=0.5 and 10 updates at delay=12, EWMA approaches 12 asymptotically.
+    for (uint32_t seq = 2u; seq <= 12u; ++seq) {
+        auto inp = makeJitterInput(seq, 0.5f, 0u);
+        broadcaster.onReceive(0u, &inp, sizeof(inp));
+        broadcaster.onTick(1.0 / 60.0, static_cast<uint64_t>(4u + seq));
+        clearSnapshots(net);
+    }
+
+    // Buffer should have grown from 2 to at least 6 (EWMA ~= 4 after 10 iterations seeded at 2).
+    // Push 30 inputs and check queueDepth cap reflects growth.
+    for (uint32_t seq = 13u; seq <= 42u; ++seq) {
+        auto inp = makeJitterInput(seq, 0.5f, 0u);
+        broadcaster.onReceive(0u, &inp, sizeof(inp));
+    }
+    uint32_t finalMax = 0u;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { finalMax = pi.bufferMaxDepth; });
+    CHECK(finalMax > 2u);
+}
+
+TEST_CASE("WorldBroadcaster: adaptive resize shrinks buffer when delay drops", "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterBufferDepth(32u);
+    broadcaster.setJitterAdaptWindow(2u);
+    broadcaster.setJitterHysteresis(0u);
+    broadcaster.setJitterMultiplier(0.f);
+    broadcaster.onConnect(0u);
+
+    // Seed at delay=12 (depth=12).
+    broadcaster.onTick(1.0 / 60.0, 13u);
+    clearSnapshots(net);
+    auto inp0 = makeJitterInput(1u, 0.5f, 1u);
+    broadcaster.onReceive(0u, &inp0, sizeof(inp0));
+    broadcaster.onTick(1.0 / 60.0, 14u);
+    clearSnapshots(net);
+
+    // Now drive delay to 1 with many updates (tickIndex = serverTick-1 each time).
+    for (uint32_t seq = 2u; seq <= 20u; ++seq) {
+        uint64_t tick = static_cast<uint64_t>(14u + seq);
+        auto inp = makeJitterInput(seq, 0.5f, tick - 1u);
+        broadcaster.onReceive(0u, &inp, sizeof(inp));
+        broadcaster.onTick(1.0 / 60.0, tick);
+        clearSnapshots(net);
+    }
+
+    uint32_t finalMax = 0u;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { finalMax = pi.bufferMaxDepth; });
+    CHECK(finalMax < 12u); // buffer shrank
+    CHECK(finalMax >= 1u); // never below floor
+}
+
+TEST_CASE("WorldBroadcaster: hysteresis prevents resize for small EWMA drift", "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterBufferDepth(32u);
+    broadcaster.setJitterAdaptWindow(2u);
+    broadcaster.setJitterHysteresis(8u); // large dead-band
+    broadcaster.setJitterMultiplier(0.f);
+    broadcaster.onConnect(0u);
+
+    // Seed at delay=5 (depth=5).
+    broadcaster.onTick(1.0 / 60.0, 6u);
+    clearSnapshots(net);
+    auto inp0 = makeJitterInput(1u, 0.5f, 1u);
+    broadcaster.onReceive(0u, &inp0, sizeof(inp0));
+    broadcaster.onTick(1.0 / 60.0, 7u);
+    clearSnapshots(net);
+
+    // Send many inputs at delay=7 — EWMA drifts toward 7, but |7-5|=2 < hysteresis=8 → no resize.
+    for (uint32_t seq = 2u; seq <= 16u; ++seq) {
+        uint64_t tick = static_cast<uint64_t>(7u + seq);
+        auto inp = makeJitterInput(seq, 0.5f, tick - 7u);
+        broadcaster.onReceive(0u, &inp, sizeof(inp));
+        broadcaster.onTick(1.0 / 60.0, tick);
+        clearSnapshots(net);
+    }
+
+    uint32_t finalMax = 0u;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { finalMax = pi.bufferMaxDepth; });
+    CHECK(finalMax == 5u); // unchanged due to hysteresis
+}
+
+TEST_CASE("WorldBroadcaster: adaptive resize clamped at jitterMaxDepth", "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterBufferDepth(6u); // global cap = 6
+    broadcaster.setJitterAdaptWindow(2u);
+    broadcaster.setJitterHysteresis(0u);
+    broadcaster.setJitterMultiplier(0.f);
+    broadcaster.onConnect(0u);
+
+    // Seed at delay=30 — capped to 6 at seeding.
+    broadcaster.onTick(1.0 / 60.0, 31u);
+    clearSnapshots(net);
+    auto inp0 = makeJitterInput(1u, 0.5f, 1u);
+    broadcaster.onReceive(0u, &inp0, sizeof(inp0));
+
+    // Drive EWMA toward 30 (delay stays large).
+    for (uint32_t seq = 2u; seq <= 12u; ++seq) {
+        auto inp = makeJitterInput(seq, 0.5f, 1u);
+        broadcaster.onReceive(0u, &inp, sizeof(inp));
+        broadcaster.onTick(1.0 / 60.0, static_cast<uint64_t>(31u + seq));
+        clearSnapshots(net);
+    }
+
+    uint32_t finalMax = 0u;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { finalMax = pi.bufferMaxDepth; });
+    CHECK(finalMax == 6u); // capped at global max
+}
+
+TEST_CASE("WorldBroadcaster: setJitterMultiplier 0 gives delay-only depth", "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterBufferDepth(32u);
+    broadcaster.setJitterAdaptWindow(2u);
+    broadcaster.setJitterHysteresis(0u);
+    broadcaster.setJitterMultiplier(0.f); // pure delay-only
+    broadcaster.onConnect(0u);
+
+    // Seed at delay=4 (depth=4).
+    broadcaster.onTick(1.0 / 60.0, 5u);
+    clearSnapshots(net);
+    // Send inputs at irregular spacings to build up jitter EWMA.
+    auto inp0 = makeJitterInput(1u, 0.5f, 1u);
+    broadcaster.onReceive(0u, &inp0, sizeof(inp0));
+
+    broadcaster.onTick(1.0 / 60.0, 6u);
+    clearSnapshots(net);
+    // Skip a few ticks to create jitter, then send at delay=4.
+    auto inp1 = makeJitterInput(2u, 0.5f, 2u);
+    broadcaster.onReceive(0u, &inp1, sizeof(inp1));
+    broadcaster.onTick(1.0 / 60.0, 7u);
+    clearSnapshots(net);
+
+    // Even with jitter EWMA > 0, multiplier=0 means it has no effect on target.
+    // EWMA delay ≈ 4 (delay stayed at ~4), so target should remain 4.
+    float gotJitter = -1.f;
+    uint32_t gotMax = 0u;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) {
+        gotJitter = pi.ewmaJitterTicks;
+        gotMax = pi.bufferMaxDepth;
+    });
+    CHECK(gotMax == 4u);
+    (void)gotJitter; // jitter EWMA may be non-zero but has no effect on depth
+}
+
+TEST_CASE("WorldBroadcaster: forEachPeer PeerInfo carries bufferMaxDepth after adaptive resize",
+          "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterBufferDepth(32u);
+    broadcaster.setJitterAdaptWindow(2u);
+    broadcaster.setJitterHysteresis(0u);
+    broadcaster.setJitterMultiplier(0.f);
+    broadcaster.onConnect(0u);
+
+    // Seed at delay=2.
+    broadcaster.onTick(1.0 / 60.0, 3u);
+    clearSnapshots(net);
+    auto inp0 = makeJitterInput(1u, 0.5f, 1u);
+    broadcaster.onReceive(0u, &inp0, sizeof(inp0));
+
+    // Drive EWMA to ~10 and let onTick resize.
+    for (uint32_t seq = 2u; seq <= 16u; ++seq) {
+        auto inp = makeJitterInput(seq, 0.5f, 0u);
+        broadcaster.onReceive(0u, &inp, sizeof(inp));
+        broadcaster.onTick(1.0 / 60.0, static_cast<uint64_t>(3u + seq));
+        clearSnapshots(net);
+    }
+
+    uint32_t gotMax = 0u;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { gotMax = pi.bufferMaxDepth; });
+    CHECK(gotMax > 2u); // PeerInfo reflects updated bufferMaxDepth
+}
+
+TEST_CASE("WorldBroadcaster: adaptive resize skips peer with no EWMA sample", "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterAdaptWindow(2u);
+    broadcaster.setJitterHysteresis(0u);
+    broadcaster.setJitterMultiplier(0.f);
+    broadcaster.onConnect(0u);
+
+    // onTick without any input from this peer — must not crash.
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    clearSnapshots(net);
+
+    // forEachPeer should still work; EWMA fields default to zero.
+    float gotEwma = -1.f;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { gotEwma = pi.ewmaDelayTicks; });
+    CHECK(gotEwma == 0.f);
+}
+
+TEST_CASE("WorldBroadcaster: adaptive resize floors target at 1 with zero delay",
+          "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterBufferDepth(32u);
+    broadcaster.setJitterAdaptWindow(2u);
+    broadcaster.setJitterHysteresis(0u);
+    broadcaster.setJitterMultiplier(0.f);
+    broadcaster.onConnect(0u);
+
+    // First input at delay=0 (tickIndex == m_currentTick after onTick(1)).
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    clearSnapshots(net);
+    auto inp = makeJitterInput(1u, 0.5f, 1u); // tickIndex=1, m_currentTick=1, delay=0
+    broadcaster.onReceive(0u, &inp, sizeof(inp));
+
+    // Resize check: EWMA=0, target = clamp(ceil(0),1,32) = 1.
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    clearSnapshots(net);
+
+    uint32_t gotMax = 0u;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { gotMax = pi.bufferMaxDepth; });
+    CHECK(gotMax == 1u);
+}
+
+TEST_CASE("WorldBroadcaster: jitter EWMA stays near zero for regular 1-tick-spaced inputs",
+          "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterAdaptWindow(4u);
+    broadcaster.setJitterMultiplier(1.f);
+    broadcaster.onConnect(0u);
+
+    // Send 20 inputs, each exactly 1 server tick apart.
+    for (uint32_t seq = 1u; seq <= 20u; ++seq) {
+        broadcaster.onTick(1.0 / 60.0, static_cast<uint64_t>(seq));
+        clearSnapshots(net);
+        auto inp = makeJitterInput(seq, 0.5f, 0u);
+        broadcaster.onReceive(0u, &inp, sizeof(inp));
+    }
+
+    float gotJitter = 1.f;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { gotJitter = pi.ewmaJitterTicks; });
+    // Inputs arrive exactly 1 tick apart → deviation = |1 - 1| = 0 each time → EWMA stays 0.
+    CHECK(gotJitter == Catch::Approx(0.f).margin(0.01f));
+}
+
+TEST_CASE("WorldBroadcaster: jitter EWMA grows for irregular arrivals", "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterAdaptWindow(4u); // alpha=0.25
+    broadcaster.setJitterMultiplier(1.f);
+    broadcaster.onConnect(0u);
+
+    // Seed at tick 1.
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    clearSnapshots(net);
+    auto inp0 = makeJitterInput(1u, 0.5f, 0u);
+    broadcaster.onReceive(0u, &inp0, sizeof(inp0));
+
+    // Now send at irregular spacings: ticks 2, 4, 5, 9, 10 (gaps of 2, 1, 4, 1).
+    uint64_t irregularTicks[] = {2u, 4u, 5u, 9u, 10u};
+    uint32_t seq = 2u;
+    for (uint64_t tick : irregularTicks) {
+        broadcaster.onTick(1.0 / 60.0, tick);
+        clearSnapshots(net);
+        auto inp = makeJitterInput(seq++, 0.5f, 0u);
+        broadcaster.onReceive(0u, &inp, sizeof(inp));
+    }
+
+    float gotJitter = 0.f;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { gotJitter = pi.ewmaJitterTicks; });
+    CHECK(gotJitter > 0.f); // irregular arrivals → non-zero jitter EWMA
+}
+
+TEST_CASE("WorldBroadcaster: adaptive resize shrinks buffer and drops excess fill",
+          "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setJitterBufferDepth(32u);
+    broadcaster.setJitterAdaptWindow(2u); // alpha=0.5
+    broadcaster.setJitterHysteresis(0u);
+    broadcaster.setJitterMultiplier(0.f);
+    broadcaster.onConnect(0u);
+
+    // Seed at delay=10 (depth=10).
+    broadcaster.onTick(1.0 / 60.0, 11u);
+    clearSnapshots(net);
+    auto inp0 = makeJitterInput(1u, 0.5f, 1u);
+    broadcaster.onReceive(0u, &inp0, sizeof(inp0));
+
+    // Fill to 8 entries.
+    for (uint32_t seq = 2u; seq <= 8u; ++seq) {
+        auto inp = makeJitterInput(seq, 0.5f, 0u);
+        broadcaster.onReceive(0u, &inp, sizeof(inp));
+    }
+
+    // Verify fill=8, max=10.
+    uint32_t preFill = 0u, preMax = 0u;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) {
+        preFill = pi.queueDepth;
+        preMax = pi.bufferMaxDepth;
+    });
+    CHECK(preFill == 8u);
+    CHECK(preMax == 10u);
+
+    // Now drive EWMA to 3 by sending at delay=3 repeatedly.
+    for (uint32_t seq = 9u; seq <= 22u; ++seq) {
+        uint64_t tick = static_cast<uint64_t>(11u + seq);
+        auto inp = makeJitterInput(seq, 0.5f, tick - 3u);
+        broadcaster.onReceive(0u, &inp, sizeof(inp));
+        broadcaster.onTick(1.0 / 60.0, tick);
+        clearSnapshots(net);
+    }
+
+    // After resize to 3, buffer fill must have been truncated to at most 3.
+    uint32_t postFill = 0u, postMax = 0u;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) {
+        postFill = pi.queueDepth;
+        postMax = pi.bufferMaxDepth;
+    });
+    CHECK(postMax < 10u);       // shrank
+    CHECK(postFill <= postMax); // fill never exceeds new max
+}
+
+TEST_CASE("WorldBroadcaster: applyConfig wires jitterAdaptWindow hysteresis multiplier",
+          "[world_broadcaster][jitter_buffer]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+
+    fl::WorldBroadcasterConfig cfg;
+    cfg.jitterBufferMaxDepth = 32u;
+    cfg.jitterAdaptWindow = 2u; // fast convergence
+    cfg.jitterHysteresis = 0u;  // resize immediately
+    cfg.jitterMultiplier = 0.f; // delay-only
+    broadcaster.applyConfig(cfg);
+
+    broadcaster.onConnect(0u);
+
+    // Seed at delay=2, then drive to delay=10; adaptive resize should fire.
+    broadcaster.onTick(1.0 / 60.0, 3u);
+    clearSnapshots(net);
+    auto inp0 = makeJitterInput(1u, 0.5f, 1u);
+    broadcaster.onReceive(0u, &inp0, sizeof(inp0));
+
+    for (uint32_t seq = 2u; seq <= 14u; ++seq) {
+        auto inp = makeJitterInput(seq, 0.5f, 0u);
+        broadcaster.onReceive(0u, &inp, sizeof(inp));
+        broadcaster.onTick(1.0 / 60.0, static_cast<uint64_t>(3u + seq));
+        clearSnapshots(net);
+    }
+
+    uint32_t finalMax = 0u;
+    broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { finalMax = pi.bufferMaxDepth; });
+    CHECK(finalMax > 2u); // config was applied: adapt window + hysteresis drove resize
 }

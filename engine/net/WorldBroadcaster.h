@@ -38,21 +38,40 @@ namespace fl {
 
 // Parsed, validated client input stored per connected peer.
 struct PeerInputState {
-    // 8-byte field first to avoid padding.
+    // 8-byte fields first to avoid padding.
     uint64_t lastActivityTick{0}; // tick of last MsgClientInput or MsgHeartbeat; set in onConnect
+    uint64_t lastInputTick{0};    // m_currentTick at last accepted MsgClientInput (inter-arrival jitter timing)
     // 4-byte fields next.
     float throttle{0.f}; // last drained value from jitterBuffer (effective input this tick)
     float elevator{0.f}; // last drained value
     float aileron{0.f};  // last drained value
     float rudder{0.f};   // last drained value
     float viewAxis[3]{1.f, 0.f, 0.f};
+    float ewmaDelayTicks{0.f};       // EWMA of one-way delay in ticks (alpha = 1/jitterAdaptWindow)
+    float ewmaJitterTicks{0.f};      // EWMA of inter-arrival jitter in ticks (RFC 3550 style)
     uint32_t lastSeqNum{0};          // seqNum of last accepted input
     uint32_t estimatedDelayTicks{0}; // one-way delay in sim ticks (derived from tickIndex)
     // 1-byte fields last.
-    uint8_t buttons{0}; // last drained value
-    bool hasSeq{false}; // false until first input received from this peer
-    // Jitter buffer: initialized to depth 1; sized from estimatedDelayTicks on first input.
+    uint8_t buttons{0};     // last drained value
+    bool hasSeq{false};     // false until first input received from this peer
+    bool ewmaSeeded{false}; // false until EWMA receives its first sample
+    // Jitter buffer: initialized to depth 1; sized from estimatedDelayTicks on first input,
+    // then continuously adjusted by the adaptive resize loop in WorldBroadcaster::onTick.
     JitterBuffer jitterBuffer{1};
+};
+
+// Snapshot of a connected peer's state, delivered by forEachPeer. The struct form makes future
+// additions (e.g. per-peer spectate target, client-version string) trivially backward-compatible
+// compared to a positional function-pointer callback.
+struct PeerInfo {
+    uint32_t peerId{};
+    EntityId eid{};
+    std::string addr;
+    uint32_t delayTicks{};     // last estimatedDelayTicks (raw one-way delay measurement)
+    uint32_t queueDepth{};     // current jitter buffer fill (inputs waiting to be drained)
+    uint32_t bufferMaxDepth{}; // current jitter buffer max depth (set by adaptive resize)
+    float ewmaDelayTicks{};    // EWMA of one-way delay; drives adaptive depth targeting
+    float ewmaJitterTicks{};   // EWMA of inter-arrival jitter; scales depth via jitterMultiplier
 };
 
 // One simulated entity together with its control source. The registry is EntityId-keyed (not peer-
@@ -83,6 +102,9 @@ struct WorldBroadcasterConfig {
     float drawDistanceKm{200.f};         // per-peer interest radius; 0 = degenerate (empty snapshots)
     uint32_t baselineIntervalTicks{120}; // force full MsgEntityEntry records every N ticks for loss recovery
     uint32_t jitterBufferMaxDepth{4};    // per-peer input queue depth; [1, JitterBuffer::kHardMaxDepth]
+    uint32_t jitterAdaptWindow{60};      // EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]
+    uint32_t jitterHysteresis{2};        // dead-band in ticks before resize fires; [0, 8]
+    float jitterMultiplier{2.0f};        // k factor: depth = ceil(ewma_delay + k*jitter); [0.0, 8.0]
 };
 
 // Wraps EntityManager to provide a server-side ISimUpdate that:
@@ -146,12 +168,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Returns true if a lockout was active and was cleared; false if the IP was not locked.
     bool unlockAdminAuth(const std::string& ip);
 
-    // Iterate all connected peers. fn receives (peerId, full "ip:port" address string, EntityId,
-    // one-way delay in sim ticks, current jitter buffer queue depth). The address string is copied
-    // per entry — safe despite INetwork::getPeerAddress() returning a single overwrite buffer.
-    void forEachPeer(std::function<void(uint32_t peerId, const std::string& addr, EntityId eid, uint32_t delayTicks,
-                                        uint32_t queueDepth)>
-                         fn) const;
+    // Iterate all connected peers. fn receives a PeerInfo snapshot for each peer; the address
+    // string is copied per entry — safe despite INetwork::getPeerAddress() returning a single
+    // overwrite buffer. Sim-thread only (called from enqueueSimCallback or onTick context).
+    void forEachPeer(std::function<void(const PeerInfo&)> fn) const;
 
     // Replace the entire in-memory ban set. Safe to call before gameLoop.start().
     void setBannedAddresses(std::unordered_set<std::string> addrs);
@@ -302,11 +322,26 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Call before gameLoop.start() or via enqueueSimCallback.
     void setBaselineInterval(uint32_t ticks) noexcept;
 
-    // Set the global maximum jitter buffer depth (ticks) used when initializing new peer buffers.
-    // The actual per-peer initial depth is min(estimatedDelayTicks, maxDepth), floored at 1.
-    // Existing peer buffers are not resized (adaptive resizing is a follow-on).
-    // Thread-safe; may be called before gameLoop.start() or via enqueueSimCallback.
+    // Set the global maximum jitter buffer depth (ticks). The actual per-peer initial depth is
+    // min(estimatedDelayTicks, maxDepth), floored at 1. The adaptive resize loop in onTick
+    // continuously adjusts per-peer depths within this bound. Thread-safe; may be called before
+    // gameLoop.start() or via enqueueSimCallback.
     void setJitterBufferDepth(uint32_t maxDepth) noexcept;
+
+    // Set the EWMA smoothing window (ticks) for adaptive jitter buffer resizing.
+    // alpha = 1/adaptWindow; larger values = slower adaptation. Range [1, 3600].
+    // Call before gameLoop.start() or via enqueueSimCallback.
+    void setJitterAdaptWindow(uint32_t ticks) noexcept;
+
+    // Set the dead-band (ticks) for adaptive resize: resize fires only when
+    // |target_depth - current_depth| > hysteresis. Range [0, 8].
+    // Call before gameLoop.start() or via enqueueSimCallback.
+    void setJitterHysteresis(uint32_t ticks) noexcept;
+
+    // Set the jitter confidence multiplier k in: depth = ceil(ewma_delay + k * jitter_ewma).
+    // 0.0 = delay-only sizing (pure EWMA, no jitter term). Range [0.0, 8.0].
+    // Call before gameLoop.start() or via enqueueSimCallback.
+    void setJitterMultiplier(float k) noexcept;
 
     // Set the gravity field applied to all FlightIntegrators spawned on this broadcaster (current
     // and future). Also records the planet radius sent to clients in MsgConnectAck so their terrain
@@ -429,6 +464,10 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     double m_drawDistanceM{200'000.0};         // precomputed from drawDistanceKm × 1000; 200 km default
     uint64_t m_baselineIntervalTicks{120u};    // ticks between full-snapshot baselines for loss recovery
     std::atomic<uint32_t> m_jitterMaxDepth{4}; // global cap for per-peer jitter buffer initialization
+    // Adaptive resize parameters — sim-thread only; hot-reloadable via enqueueSimCallback.
+    uint32_t m_jitterAdaptWindow{60}; // EWMA smoothing window; alpha = 1/window
+    uint32_t m_jitterHysteresis{2};   // dead-band ticks before resize fires
+    float m_jitterMultiplier{2.0f};   // k factor in depth = ceil(ewma + k*jitter)
 
     // Per-peer entity known-gen set: peerId → (entityIdx → last-sent generation, truncated uint16).
     // Cleared at each baseline tick (forces full re-sync for all visible entities).

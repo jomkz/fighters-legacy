@@ -191,7 +191,11 @@ After passing validation the server enqueues each accepted input into a per-peer
 exactly once per sim tick before the flight integrator is stepped; when the buffer runs empty the
 last drained input is repeated (stale repeat) rather than zeroing controls, preventing coasting
 under transient packet loss. The initial buffer depth per peer is `min(estimatedDelayTicks, maxDepth)`
-seeded at first input; existing buffers are not resized mid-session.
+seeded at first input. The depth is then continuously adjusted each tick: an EWMA of
+`estimatedDelayTicks` and an RFC 3550-style inter-arrival jitter estimate drive
+`target = ceil(ewma_delay + k × jitter)`, clamped to `[1, jitter_buffer_depth]`; resize fires only
+when `|target − current| > hysteresis`. Configurable via `[world].jitter_buffer_adapt_window`,
+`jitter_buffer_hysteresis`, and `jitter_buffer_jitter_multiplier`.
 
 ### MsgWeatherState — 20 bytes
 

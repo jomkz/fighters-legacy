@@ -391,6 +391,9 @@ int main(int argc, char** argv) {
     wbConfig.drawDistanceKm = static_cast<float>(cfg.drawDistanceKm);
     wbConfig.baselineIntervalTicks = cfg.baselineIntervalTicks;
     wbConfig.jitterBufferMaxDepth = cfg.jitterBufferDepth;
+    wbConfig.jitterAdaptWindow = cfg.jitterAdaptWindow;
+    wbConfig.jitterHysteresis = cfg.jitterHysteresis;
+    wbConfig.jitterMultiplier = cfg.jitterMultiplier;
     broadcaster.applyConfig(wbConfig);
     // Planet gravity and terrain curvature. Function-scope static so lifetime outlasts the broadcaster.
     static fl::CentralGravityField s_gravity{6'371'000.f};

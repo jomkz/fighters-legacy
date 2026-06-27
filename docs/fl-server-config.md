@@ -68,7 +68,10 @@ time_scale         = 10.0        # game seconds per real second; 10 = full day/n
 # planet_radius_m         = 6371000  # planet sphere radius (m); Earth default
 # draw_distance_km        = 200.0    # per-peer interest management radius (km); [1, 100000]
 # baseline_interval_ticks = 120      # full-snapshot baseline interval for delta recovery; [1, 3600]
-# jitter_buffer_depth     = 4        # per-peer input queue depth (ticks); initial depth seeded from one-way delay; [1, 32]
+# jitter_buffer_depth           = 4    # per-peer input queue depth (ticks); global cap for adaptive sizing; [1, 32]
+# jitter_buffer_adapt_window    = 60   # EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]
+# jitter_buffer_hysteresis      = 2    # resize dead-band in ticks; [0, 8]
+# jitter_buffer_jitter_multiplier = 2.0  # k factor: depth = ceil(ewma_delay + k*jitter); [0.0, 8.0]
 
 [ai]
 difficulty_floor = "recruit"
@@ -381,14 +384,52 @@ Interval in sim ticks between full-snapshot baselines. On baseline ticks all vis
 |---|---|---|
 | integer | `4` | `[1, 32]` |
 
-Per-peer input ring buffer depth in sim ticks. Each connecting peer's buffer is initialized to
-`min(estimatedDelayTicks, jitter_buffer_depth)` on their first `MsgClientInput`. The server drains
+Per-peer input ring buffer depth in sim ticks. Sets the **global cap**: the adaptive resize loop
+(`jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, `jitter_buffer_jitter_multiplier`) may
+reduce individual peer depths below this value but never increases them above it. Each connecting
+peer's buffer is initialized to `min(estimatedDelayTicks, jitter_buffer_depth)` on their first
+`MsgClientInput`, then continuously adjusted by the adaptive loop each tick. The server drains
 exactly one input per sim tick before stepping the flight integrator; when the buffer runs empty the
 last drained input is stale-repeated, preventing control surfaces from zeroing under transient packet
-loss. Larger values add input latency but tolerate more jitter; smaller values minimize added latency
-but leave less headroom. Changing this value only affects **new** connections — existing peer buffers
-retain their initialized depth. Out-of-range values are rejected with a Warn and the default is used.
+loss. Out-of-range values are rejected with a Warn and the default is used.
 **Hot-reloadable** via `reload_config`.
+
+### `jitter_buffer_adapt_window`
+
+| Type | Default | Range |
+|---|---|---|
+| integer | `60` | `[10, 3600]` |
+
+EWMA smoothing window in sim ticks for adaptive buffer sizing. The exponential moving average
+weight is `alpha = 1/adapt_window`, so a window of 60 ticks (1 s at 60 Hz) gives each new
+measurement a weight of ~1.7 %. Larger windows produce slower but more stable adaptation;
+smaller windows respond faster to network changes but may oscillate. The EWMA is updated on
+every accepted `MsgClientInput`; the resize check runs every tick for all connected peers.
+Out-of-range values are rejected with a Warn and the default is used. **Hot-reloadable** via `reload_config`.
+
+### `jitter_buffer_hysteresis`
+
+| Type | Default | Range |
+|---|---|---|
+| integer | `2` | `[0, 8]` |
+
+Dead-band in ticks around the current buffer depth. A resize fires only when
+`|target_depth − current_depth| > hysteresis`, preventing rapid oscillation when the EWMA
+hovers near a depth boundary. Set to `0` for immediate resizing on any EWMA change; set
+higher for more stable depth under moderate jitter. Out-of-range values are rejected with a
+Warn and the default is used. **Hot-reloadable** via `reload_config`.
+
+### `jitter_buffer_jitter_multiplier`
+
+| Type | Default | Range |
+|---|---|---|
+| float | `2.0` | `[0.0, 8.0]` |
+
+Confidence factor `k` in the depth formula: `depth = ceil(ewma_delay + k × jitter_ewma)`.
+The jitter EWMA tracks RFC 3550-style inter-arrival deviation from the expected 1-tick spacing.
+Higher values add extra buffer headroom during bursty conditions; `0.0` disables the jitter
+term entirely (pure EWMA-delay sizing, equivalent to #424 without #429). Out-of-range values
+are rejected with a Warn and the default is used. **Hot-reloadable** via `reload_config`.
 
 ---
 
@@ -833,7 +874,7 @@ process.
 | `spawn` | `<type> <x> <y> <z> [--ai <behavior> [args...]]` | Spawn a registered entity type at the given world position; optionally attach an AI controller. C++ behaviors: `loiter [cx cy cz [radius_m [alt_m [throttle [cw\|ccw]]]]]`, `waypoint x y z [x y z ...] [--loop]`, `pursuit <entityIdx>`, `evade <entityIdx>`, `break <entityIdx> [rollDuration]`, `lead <entityIdx> [navGain]`, `lag <entityIdx> [lagFraction]`, `immelmann [pullDur] [rollDur]`, `split_s [rollDur] [pullDur]`, `high_yo_yo <entityIdx> [climbDur] [reacquireDur]`, `low_yo_yo <entityIdx> [diveDur] [pullDur]`. Lua behavior: `lua <script_name>` (loads `ai/<script_name>.lua` from content packs; see `docs/modding/ai.md`). If the entity type's TOML sets `ai_script`, that script is attached automatically when `--ai` is omitted. |
 | `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
 | `tp` | `<idx> <x> <y> <z>` | Teleport entity `<idx>` to world position; also used by the game client's game console to teleport the player entity |
-| `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `baseline_interval_ticks`, `jitter_buffer_depth` (takes effect immediately for new connections; existing peer buffers retain their initialized depth) |
+| `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `baseline_interval_ticks`, `jitter_buffer_depth`, `jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, `jitter_buffer_jitter_multiplier` (all jitter adaptive params take effect on the next sim tick for all connected peers) |
 | `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
 | `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |
 | `pause` | — | Pause the simulation — ticks stop advancing; network connections remain active. In single-player the game client sends this automatically when the pause menu is opened. |
