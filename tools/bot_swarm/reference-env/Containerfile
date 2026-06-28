@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 MKZ Systems LLC
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Reference build/run environment for the bot_swarm load harness. The repo is bind-mounted at

@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 MKZ Systems LLC
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Cross-platform 8-vCPU / 16 GB reference VM for bot_swarm load characterisation. A true VM
