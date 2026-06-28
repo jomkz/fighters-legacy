@@ -31,6 +31,10 @@
 #include <sys/resource.h>
 #endif
 #ifdef _WIN32
+// NOMINMAX: <windows.h> otherwise defines min()/max() macros that clobber std::min/std::max
+// (the threads-count math below). Keep the full header so <mmsystem.h>'s timeBeginPeriod
+// (winmm) stays declared — WIN32_LEAN_AND_MEAN would drop it.
+#define NOMINMAX
 #include <windows.h>
 #endif
 
