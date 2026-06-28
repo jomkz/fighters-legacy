@@ -482,6 +482,39 @@ Expected client output: `connecting` → `connected` → pings → `disconnectin
 
 ---
 
+## bot_swarm
+
+`bot_swarm` (`tools/bot_swarm/`) is the headless multi-client **load generator** — the
+multi-client companion to `net_check`. It connects N synthetic game clients to a running
+`fl-server`, sustains `MsgClientInput` with a pluggable flight pattern, and reports the
+client-observable scale metrics (observed server tick-Hz, downstream KB/s per client, RTT).
+See [docs/load-testing.md](load-testing.md) for the full reference and the ceiling-characterisation
+runbook.
+
+### Build
+
+```bash
+cmake --build --preset debug --target fl-server bot_swarm
+# Binary: build/debug/tools/bot_swarm
+```
+
+### Usage
+
+```bash
+# Turnkey: the runner launches fl-server with a load-test config, then drives the swarm.
+tools/bot_swarm/run_loadtest.sh build/debug 128 30 weave
+# -> tools/bot_swarm/results/loadtest_128c_weave_<ts>.json
+
+# Or against an already-running server:
+bot_swarm 127.0.0.1 4778 --clients 128 --duration 30 --pattern weave --json out.json
+```
+
+> The connect-rate-limit/per-IP caps come only from `server.toml` — the default
+> `connect_rate_limit_count = 5` rejects a rapid 128-client ramp. `run_loadtest.sh` writes the
+> required load-test config; see [docs/load-testing.md](load-testing.md).
+
+---
+
 ## locale-extract
 
 `locale-extract` is a developer tool that keeps source key references and
