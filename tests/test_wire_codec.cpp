@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 TEST_CASE("WireCodec: readMsg copies a full struct and rejects short buffers", "[wire_codec]") {
@@ -150,6 +151,43 @@ TEST_CASE("WireCodec ext: appendExtRaw and findExt raw bytes round-trip", "[wire
     CHECK(p[0] == 0x11);
     CHECK(p[1] == 0x22);
     CHECK(p[2] == 0x33);
+}
+
+TEST_CASE("WireCodec ext: SnapshotDespawn uint32 array round-trips at an unaligned offset", "[wire_codec]") {
+    // The despawn TLV (#516) carries a uint32[] of removed entity indices. It must be readable per
+    // element via memcpy even when the TLV payload starts at an offset that is not 4-byte aligned
+    // (unaligned native loads fault/UB on ARM64). Precede it with a 1-byte-payload TLV so the despawn
+    // payload begins at an odd offset.
+    std::vector<uint8_t> buf;
+    const uint8_t kPad = 0x7Fu;
+    fl::appendExtRaw(buf, 0x0100u, &kPad, 1u); // 4-byte header + 1 byte => despawn payload starts at offset 9
+
+    const uint32_t ids[] = {3u, 260u, 70000u, 4u};
+    fl::appendExtRaw(buf, static_cast<uint16_t>(fl::ExtTag::SnapshotDespawn), ids, sizeof(ids));
+
+    uint16_t valueLen{};
+    const uint8_t* p =
+        fl::findExt(buf.data(), buf.size(), static_cast<uint16_t>(fl::ExtTag::SnapshotDespawn), valueLen);
+    REQUIRE(p != nullptr);
+    REQUIRE(valueLen == sizeof(ids));
+    REQUIRE(valueLen % 4u == 0u);
+
+    const uint16_t count = valueLen / 4u;
+    REQUIRE(count == 4u);
+    for (uint16_t i = 0; i < count; ++i) {
+        uint32_t got{};
+        std::memcpy(&got, p + i * 4u, 4u); // unaligned-safe per-element read
+        CHECK(got == ids[i]);
+    }
+
+    // Empty list path: a zero-length despawn TLV is still locatable but yields no indices.
+    std::vector<uint8_t> empty;
+    fl::appendExtRaw(empty, static_cast<uint16_t>(fl::ExtTag::SnapshotDespawn), nullptr, 0u);
+    uint16_t emptyLen{0xFFFFu};
+    const uint8_t* ep =
+        fl::findExt(empty.data(), empty.size(), static_cast<uint16_t>(fl::ExtTag::SnapshotDespawn), emptyLen);
+    REQUIRE(ep != nullptr);
+    CHECK(emptyLen == 0u);
 }
 
 TEST_CASE("WireCodec: appendMsg + writeMsgAt build an array message the reader round-trips", "[wire_codec]") {

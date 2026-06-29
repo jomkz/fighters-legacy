@@ -51,6 +51,7 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.idleTimeoutS == 0);
     CHECK(cfg.drawDistanceKm == 200.0);
     CHECK(cfg.baselineIntervalTicks == 120u);
+    CHECK(cfg.snapshotBudgetBytes == 1200u);
     CHECK(cfg.jitterBufferDepth == 4u);
     CHECK(cfg.jitterAdaptWindow == 60u);
     CHECK(cfg.jitterHysteresis == 2u);
@@ -429,6 +430,27 @@ TEST_CASE("parseServerConfig: baseline_interval_ticks 3601 warns and uses defaul
     auto cfg = parseServerConfig("[world]\nbaseline_interval_ticks = 3601\n", &log);
     CHECK(cfg.baselineIntervalTicks == 120u);
     CHECK(log.hasMessage(LogLevel::Warn, "baseline_interval_ticks"));
+}
+
+TEST_CASE("parseServerConfig: reads world.snapshot_budget_bytes", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\nsnapshot_budget_bytes = 800\n", &log);
+    CHECK(cfg.snapshotBudgetBytes == 800u);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: snapshot_budget_bytes 0 is accepted (unlimited)", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\nsnapshot_budget_bytes = 0\n", &log);
+    CHECK(cfg.snapshotBudgetBytes == 0u);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: snapshot_budget_bytes 70000 warns and uses default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\nsnapshot_budget_bytes = 70000\n", &log);
+    CHECK(cfg.snapshotBudgetBytes == 1200u);
+    CHECK(log.hasMessage(LogLevel::Warn, "snapshot_budget_bytes"));
 }
 
 TEST_CASE("parseServerConfig: reads world.jitter_buffer_depth", "[server_config]") {

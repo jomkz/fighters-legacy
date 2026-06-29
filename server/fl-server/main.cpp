@@ -410,6 +410,7 @@ int main(int argc, char** argv) {
     wbConfig.idleTimeoutS = cfg.idleTimeoutS;
     wbConfig.drawDistanceKm = static_cast<float>(cfg.drawDistanceKm);
     wbConfig.baselineIntervalTicks = cfg.baselineIntervalTicks;
+    wbConfig.snapshotBudgetBytes = cfg.snapshotBudgetBytes;
     wbConfig.jitterBufferMaxDepth = cfg.jitterBufferDepth;
     wbConfig.jitterAdaptWindow = cfg.jitterAdaptWindow;
     wbConfig.jitterHysteresis = cfg.jitterHysteresis;

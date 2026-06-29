@@ -333,6 +333,45 @@ TEST_CASE("SnapshotCodec: deterministic encoding and locked byte sizes", "[snaps
     CHECK(wd.byteCount() == 24u);
 }
 
+TEST_CASE("SnapshotCodec: estimateRecordBytes matches the encoder across record variants", "[snapshot_codec]") {
+    const double origin[3] = {0.0, 0.0, 0.0};
+
+    // Encode one record and return its byte-aligned size for comparison.
+    auto encodedBytes = [&](const fl::QuantEntity& e, bool sendGen) {
+        fl::BitWriter w;
+        uint32_t prev = 0; // idxDelta == e.idx
+        fl::encodeRecord(w, e, prev, origin, sendGen);
+        w.alignToByte();
+        return static_cast<uint32_t>(w.byteCount());
+    };
+
+    struct Variant {
+        bool isFull, sendGen, hasOmega;
+        uint32_t typeIndex, idx;
+    };
+    const Variant variants[] = {
+        {true, true, true, 42u, 10u},    // full + gen + own-omega
+        {true, true, false, 300u, 7u},   // full + gen, no omega, multi-byte typeIndex varint
+        {false, false, false, 0u, 11u},  // steady-state delta
+        {false, true, false, 0u, 5000u}, // delta carrying gen, multi-byte idx-delta varint
+    };
+
+    for (const auto& v : variants) {
+        fl::QuantEntity e;
+        e.idx = v.idx;
+        e.gen = 1;
+        e.typeIndex = v.typeIndex;
+        e.isFull = v.isFull;
+        e.hasOmega = v.hasOmega;
+        const uint32_t est = fl::estimateRecordBytes(v.isFull, v.sendGen, v.hasOmega, v.typeIndex, v.idx);
+        const uint32_t actual = encodedBytes(e, v.sendGen);
+        // For a single byte-aligned record the per-record ceil estimate equals the encoded size, and
+        // is never an under-count (the budget never overflows the wire).
+        CHECK(est == actual);
+        CHECK(est >= actual);
+    }
+}
+
 TEST_CASE("SnapshotCodec: bandwidth guard - quantized records beat the old 64-byte encoding", "[snapshot_codec]") {
     const double origin[3] = {0.0, 0.0, 0.0};
     const int kCount = 32;

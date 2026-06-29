@@ -5846,3 +5846,242 @@ TEST_CASE("WorldBroadcaster: applyConfig wires jitterAdaptWindow hysteresis mult
     broadcaster.forEachPeer([&](const fl::PeerInfo& pi) { finalMax = pi.bufferMaxDepth; });
     CHECK(finalMax > 2u); // config was applied: adapt window + hysteresis drove resize
 }
+
+// ---------------------------------------------------------------------------
+// Priority/budget snapshot scheduler (#516)
+// ---------------------------------------------------------------------------
+
+// Read the SnapshotDespawn TLV (uint32[] of removed indices) from a snapshot packet.
+static std::vector<uint32_t> decodeDespawns(const std::vector<uint8_t>& pkt) {
+    std::vector<uint32_t> ids;
+    fl::MsgWorldSnapshotHeader hdr = parseSnapshotHeader(pkt);
+    const std::size_t extOffset = sizeof(hdr) + hdr.bitstreamBytes;
+    if (pkt.size() <= extOffset)
+        return ids;
+    uint16_t valueLen{};
+    const uint8_t* p = fl::findExt(pkt.data() + extOffset, pkt.size() - extOffset,
+                                   static_cast<uint16_t>(fl::ExtTag::SnapshotDespawn), valueLen);
+    if (!p)
+        return ids;
+    for (uint16_t i = 0; i + 4u <= valueLen; i += 4u) {
+        uint32_t v{};
+        std::memcpy(&v, p + i, 4u);
+        ids.push_back(v);
+    }
+    return ids;
+}
+
+TEST_CASE("WorldBroadcaster: snapshot budget caps records and always includes own entity",
+          "[world_broadcaster][interest][budget]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    // Spawn 40 entities clustered near the origin so they're all within interest.
+    for (int i = 0; i < 40; ++i) {
+        fl::EntityTransform t{};
+        t.pos[0] = i * 5.0; // within a few hundred metres
+        t.pos[1] = 500.0;
+        em.spawn("builtin:debug-entity", t);
+    }
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setDrawDistance(200.f);
+    broadcaster.setSnapshotBudget(200u); // tiny budget: only a handful of ~24-31 B records fit
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    auto snaps = snapshotsFor(net, 0);
+    REQUIRE(!snaps.empty());
+    auto hdr = parseSnapshotHeader(snaps.back());
+    // Budget bounds the record count well below the 41 visible (40 + peer).
+    CHECK(totalEntityCount(hdr) >= 1u);
+    CHECK(totalEntityCount(hdr) < 41u);
+
+    // The peer's own entity is always present (prediction reconciliation needs it).
+    fl::MsgConnectAck ack{};
+    for (const auto& [pid, pkt] : net.perPeerSends)
+        if (pid == 0u && !pkt.empty() && pkt[0] == static_cast<uint8_t>(fl::MsgId::ConnectAck))
+            std::memcpy(&ack, pkt.data(), sizeof(ack));
+    bool sawOwn = false;
+    for (const auto& e : decodeEntities(snaps.back()))
+        if (e.entityIdx == ack.assignedEntityIdx)
+            sawOwn = true;
+    CHECK(sawOwn);
+}
+
+TEST_CASE("WorldBroadcaster: budget==0 sends every visible entity (legacy path)",
+          "[world_broadcaster][interest][budget]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    for (int i = 0; i < 10; ++i) {
+        fl::EntityTransform t{};
+        t.pos[0] = i * 5.0;
+        t.pos[1] = 500.0;
+        em.spawn("builtin:debug-entity", t);
+    }
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setDrawDistance(200.f); // budget defaults to 0 (unlimited)
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 1u);
+
+    auto snaps = snapshotsFor(net, 0);
+    REQUIRE(!snaps.empty());
+    CHECK(totalEntityCount(parseSnapshotHeader(snaps.back())) == 11u); // 10 + peer, all sent
+}
+
+TEST_CASE("WorldBroadcaster: starved entity eventually included under a tight budget",
+          "[world_broadcaster][interest][budget]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    std::vector<uint32_t> idxs;
+    for (int i = 0; i < 30; ++i) {
+        fl::EntityTransform t{};
+        t.pos[0] = 100.0 + i * 10.0;
+        t.pos[1] = 500.0;
+        idxs.push_back(em.spawn("builtin:debug-entity", t).index);
+    }
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setDrawDistance(200.f);
+    broadcaster.setSnapshotBudget(160u);      // only a few records per tick
+    broadcaster.setBaselineInterval(100000u); // disable baseline churn for this test
+    broadcaster.onConnect(0u);
+
+    // The farthest entity (highest idx) starts low priority; over enough ticks its recency term must
+    // lift it into a snapshot at least once.
+    const uint32_t starved = idxs.back();
+    bool everSent = false;
+    for (uint64_t tick = 1; tick <= 200 && !everSent; ++tick) {
+        clearSnapshots(net);
+        broadcaster.onTick(1.0 / 60.0, tick);
+        for (const auto& e : decodeEntities(snapshotsFor(net, 0).back()))
+            if (e.entityIdx == starved)
+                everSent = true;
+    }
+    CHECK(everSent); // anti-starvation guarantee (recency term)
+}
+
+TEST_CASE("WorldBroadcaster: killing a known entity emits a despawn TLV, interest-out does not",
+          "[world_broadcaster][interest][budget]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::EntityTransform t{};
+    t.pos[0] = 100.0;
+    t.pos[1] = 500.0;
+    fl::EntityId victim = em.spawn("builtin:debug-entity", t);
+    const uint32_t victimIdx = victim.index;
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setDrawDistance(200.f);
+    broadcaster.onConnect(0u);
+
+    // Tick 1: peer learns the victim.
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    {
+        bool saw = false;
+        for (const auto& e : decodeEntities(snapshotsFor(net, 0).back()))
+            if (e.entityIdx == victimIdx)
+                saw = true;
+        REQUIRE(saw);
+        CHECK(decodeDespawns(snapshotsFor(net, 0).back()).empty());
+    }
+
+    // Kill the victim and tick again: an explicit despawn must be emitted.
+    em.kill(victim);
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    {
+        auto despawns = decodeDespawns(snapshotsFor(net, 0).back());
+        bool listed = std::find(despawns.begin(), despawns.end(), victimIdx) != despawns.end();
+        CHECK(listed);
+    }
+}
+
+TEST_CASE("WorldBroadcaster: entity flown out of interest is not despawned", "[world_broadcaster][interest][budget]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    // A controllable entity that we can teleport out of interest by moving it via its state.
+    fl::EntityTransform t{};
+    t.pos[0] = 100.0;
+    t.pos[1] = 500.0;
+    fl::EntityId mover = em.spawn("builtin:debug-entity", t);
+    const uint32_t moverIdx = mover.index;
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setDrawDistance(1.f); // 1 km
+    broadcaster.onConnect(0u);
+    broadcaster.onTick(1.0 / 60.0, 1u); // peer learns the mover
+
+    // Move the entity far outside the interest sphere (still alive in the sim).
+    if (auto* st = em.get(mover)) {
+        const_cast<fl::EntityState*>(st)->transform.pos[0] = 50'000.0; // 50 km away
+    }
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 2u);
+
+    // It is no longer in the snapshot, but it must NOT be despawned (it's still alive, just far) —
+    // the client's retention timeout handles interest-out.
+    auto pkt = snapshotsFor(net, 0).back();
+    auto despawns = decodeDespawns(pkt);
+    CHECK(std::find(despawns.begin(), despawns.end(), moverIdx) == despawns.end());
+}
+
+TEST_CASE("WorldBroadcaster: re-entry after retention gap forces a full record",
+          "[world_broadcaster][interest][budget]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    registry.registerType(makeDebugDef());
+    fl::EntityManager em(logger, registry);
+
+    fl::EntityTransform t{};
+    t.pos[0] = 100.0;
+    t.pos[1] = 500.0;
+    fl::EntityId e = em.spawn("builtin:debug-entity", t);
+    const uint32_t eIdx = e.index;
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setDrawDistance(200.f);
+    broadcaster.setBaselineInterval(100000u); // isolate the retention rule from baseline churn
+    broadcaster.onConnect(0u);
+
+    // Tick 1: full record (first sight). Then ticks where it stays known → deltas.
+    broadcaster.onTick(1.0 / 60.0, 1u);
+    auto isFullFor = [&](const std::vector<uint8_t>& pkt) {
+        for (const auto& d : decodeEntities(pkt))
+            if (d.entityIdx == eIdx)
+                return d.isFull;
+        return false;
+    };
+    REQUIRE(isFullFor(snapshotsFor(net, 0).back())); // first sight = full
+
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 2u);
+    CHECK_FALSE(isFullFor(snapshotsFor(net, 0).back())); // known → delta
+
+    // Jump the tick index far past kSnapshotRetentionTicks since lastSentTick (=2): the entity is
+    // re-sent as a full record because the client may have evicted it.
+    clearSnapshots(net);
+    broadcaster.onTick(1.0 / 60.0, 2u + fl::kSnapshotRetentionTicks + 5u);
+    CHECK(isFullFor(snapshotsFor(net, 0).back()));
+}

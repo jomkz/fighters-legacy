@@ -130,7 +130,7 @@ development (pre-`kProtocolVersion` freeze), a dated **decision record** (see be
 | Multiplayer topology | `fl-server` dedicated binary + `fl-lobby` REST service | Server-authoritative; no P2P player-count cap; self-hostable |
 | Multiplayer scale target | **128+ simultaneous players** (32 = near-term acceptance floor) | Drives the scaling seams below; see [docs/design.md](design.md) "Multiplayer at Scale". (Revised by the 2026-06-28 decision record.) |
 | Server simulation | Data-parallel **job system** over a single authoritative tick | Parallelizes per-entity integration + AI so 128 players + AI + projectiles hold 60 Hz; spatial sharding deferred as a later option |
-| Wire state encoding | **Quantized / bit-packed** snapshot stream (#515 ✓) + 3D interest culling (#402 ✓) + per-client priority/budget scheduling (#516, planned) | Quantized codec landed: frame-origin-relative positions, smallest-three quaternion, quantized vel/omega — replaced the fixed 64/88-byte records (see [docs/snapshot-quantization.md](snapshot-quantization.md)). Priority/budget scheduling keeps per-client bandwidth bounded as population grows |
+| Wire state encoding | **Quantized / bit-packed** snapshot stream (#515 ✓) + 3D interest culling (#402 ✓) + per-client priority/budget scheduling (#516 ✓) | Quantized codec landed: frame-origin-relative positions, smallest-three quaternion, quantized vel/omega — replaced the fixed 64/88-byte records (see [docs/snapshot-quantization.md](snapshot-quantization.md)). Priority/budget scheduling (relevance-ranked per-client byte budget + hybrid despawn/retention) keeps per-client bandwidth bounded as population grows |
 | Player identity / auth | **Server-side, pluggable `IIdentityProvider`** (offline-verifiable signed tokens) | Persistent stats/ranking/bans key on a verified account, not a spoofable client GUID; self-hostable, no first-party hosted infra |
 | Persistence | **`IPersistence` storage HAL** (SQLite single-server, Postgres for clusters) | Accounts, stats, bans, persistent-world state; promotes file-based banlists into a store |
 | Cluster orchestration / live services | **Go** (k8s/OpenShift operator, Agones-native; `fl-account`, `fl-review`) | Intentional polyglot boundary: C++ engine/game/server, Go infrastructure; idiomatic for the k8s ecosystem |
@@ -188,6 +188,21 @@ transport-agnostic (stays on `enet6`), so it proceeds independently of the trans
 (Epic L). The priority/budget scheduler (#516), client-acked baselines (#517), and congestion
 response (#518) build on this codec. Full design in
 [docs/snapshot-quantization.md](snapshot-quantization.md).
+
+**2026-06-29 — Priority/budget snapshot scheduler (Epic B, #516).** The quantized codec (#515) cut the
+per-record cost but the server still sent *every* visible entity every tick, so aggregate bandwidth
+still grew O(visible) per client. Each peer now gets a per-tick byte budget (`[world]
+snapshot_budget_bytes`, default 1200, 0 = unlimited); the pure `engine/net/SnapshotScheduler` ranks
+the visible set by relevance (distance, closing-speed, recency, player-owned) and sends only the
+highest-priority records that fit, deferring the rest. A recency term guarantees eventual inclusion of
+every visible entity (no starvation) and the peer's own entity is always sent (client-side prediction
+needs it). Because budgeting omits entities from some snapshots, this also adds a **hybrid despawn
+model**: the client retains entity state across snapshots and evicts only on an explicit
+`SnapshotDespawn` TLV (a confirmed sim removal) or after a retention timeout (interest-out / lost
+despawn); the server force-sends a full record on re-entry past that window so a returning entity stays
+decodable. Wire-additive (new TLV tag only, `kProtocolVersion` unchanged); the bandwidth win is
+measured by `bot_swarm`'s `downstream_kbs_per_client`. Client-acked baselines (#517) and adaptive
+send-rate/congestion (#518) build on this.
 
 ## Content Pack Architecture
 

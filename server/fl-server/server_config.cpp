@@ -62,6 +62,7 @@ static const char* kDefaultToml =
     "# planet_radius_m = 6371000        # planet sphere radius (m); Earth default\n"
     "# draw_distance_km = 200.0         # per-peer interest management radius (km); [1, 100000]\n"
     "# baseline_interval_ticks = 120    # full-snapshot baseline interval for delta recovery; [1, 3600]\n"
+    "# snapshot_budget_bytes = 1200     # per-client snapshot byte budget; 0 = unlimited; [0, 65535]\n"
     "# jitter_buffer_depth = 4          # per-peer input queue depth (ticks); global cap for adaptive sizing; [1, 32]\n"
     "# jitter_buffer_adapt_window = 60  # EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]\n"
     "# jitter_buffer_hysteresis = 2     # resize dead-band in ticks; [0, 8]\n"
@@ -294,6 +295,14 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                          "world.baseline_interval_ticks out of range [1, 3600]; using default 120");
             } else {
                 cfg.baselineIntervalTicks = static_cast<uint32_t>(*v);
+            }
+        }
+        if (auto v = tbl["world"]["snapshot_budget_bytes"].value<int64_t>()) {
+            if (*v < int64_t{0} || *v > int64_t{65535}) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.snapshot_budget_bytes out of range [0, 65535]; using default 1200");
+            } else {
+                cfg.snapshotBudgetBytes = static_cast<uint32_t>(*v);
             }
         }
         if (auto v = tbl["world"]["jitter_buffer_depth"].value<int64_t>()) {

@@ -130,4 +130,32 @@ bool decodeRecord(BitReader& r, QuantEntity& out, uint32_t& prevIdx, const doubl
     return true;
 }
 
+namespace {
+// Bit cost of an LEB128 varint: 8 bits per 7-bit group, minimum one byte (value 0..127).
+uint32_t varintBits(uint32_t value) noexcept {
+    uint32_t groups = 1;
+    while (value >= 0x80u) {
+        value >>= 7;
+        ++groups;
+    }
+    return groups * 8u;
+}
+} // namespace
+
+uint32_t estimateRecordBytes(bool isFull, bool sendGen, bool hasOmega, uint32_t typeIndex, uint32_t idxDelta) noexcept {
+    uint32_t bits = varintBits(idxDelta); // idx delta varint
+    bits += 3;                            // full + genPresent + omegaPresent flag bits
+    if (sendGen)
+        bits += 16; // gen
+    if (isFull)
+        bits += varintBits(typeIndex); // typeIndex varint
+    bits += 3u * static_cast<uint32_t>(kPosBitsPerAxis);
+    bits += 2u + 3u * static_cast<uint32_t>(kQuatBits); // smallest-three: 2-bit index + 3 components
+    bits += 3u * static_cast<uint32_t>(kVelBits);
+    if (hasOmega)
+        bits += 3u * static_cast<uint32_t>(kOmegaBits);
+    bits += static_cast<uint32_t>(kDamageBits + kEngineFailBits + kThrottleBits + kFuelBits) + 2u; // +ab+owned
+    return (bits + 7u) / 8u;
+}
+
 } // namespace fl

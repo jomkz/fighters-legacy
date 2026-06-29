@@ -69,6 +69,7 @@ time_scale         = 10.0        # game seconds per real second; 10 = full day/n
 # planet_radius_m         = 6371000  # planet sphere radius (m); Earth default
 # draw_distance_km        = 200.0    # per-peer interest management radius (km); [1, 100000]
 # baseline_interval_ticks = 120      # full-snapshot baseline interval for delta recovery; [1, 3600]
+# snapshot_budget_bytes   = 1200     # per-client snapshot byte budget; 0 = unlimited; [0, 65535]
 # jitter_buffer_depth           = 4    # per-peer input queue depth (ticks); global cap for adaptive sizing; [1, 32]
 # jitter_buffer_adapt_window    = 60   # EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]
 # jitter_buffer_hysteresis      = 2    # resize dead-band in ticks; [0, 8]
@@ -382,7 +383,15 @@ Per-peer interest management radius in kilometres. Only entities within this XZ-
 |---|---|---|
 | integer | `120` | `[1, 3600]` |
 
-Interval in sim ticks between full-snapshot baselines. On baseline ticks all visible entities receive a full `MsgEntityEntry` regardless of known-entity state, providing UDP packet-loss recovery. At 60 Hz: `120` = 2 s recovery window. Smaller values reduce recovery time but increase bandwidth. Out-of-range values are rejected with a Warn and the default is used. **Hot-reloadable** via `reload_config`.
+Interval in sim ticks between full-snapshot baselines. On baseline ticks all visible entities receive a full record regardless of known-entity state, providing UDP packet-loss recovery. At 60 Hz: `120` = 2 s recovery window. Smaller values reduce recovery time but increase bandwidth. Out-of-range values are rejected with a Warn and the default is used. **Hot-reloadable** via `reload_config`.
+
+### `snapshot_budget_bytes`
+
+| Type | Default | Range |
+|---|---|---|
+| integer | `1200` | `[0, 65535]` |
+
+Per-client snapshot byte budget (#516). When non-zero, each peer's `MsgWorldSnapshot` is capped at roughly this many bytes: the priority/budget scheduler ranks the visible entities by relevance (distance, closing-speed, recency, player-owned) and sends only the highest-priority set that fits, deferring the rest to later ticks. A recency term guarantees every visible entity is eventually sent, and the peer's own entity is always included. `0` disables the cap (every visible entity is sent every tick — the legacy behaviour). The default `1200` keeps a snapshot within a single ~1,400-byte MTU fragment (~72 KB/s at 60 Hz). Lower it to hold the per-client bandwidth gate as the player count grows, at the cost of lower-priority entities updating less frequently. Out-of-range values are rejected with a Warn and the default is used. **Hot-reloadable** via `reload_config`.
 
 ### `jitter_buffer_depth`
 
@@ -924,7 +933,7 @@ process.
 | `spawn` | `<type> <x> <y> <z> [--ai <behavior> [args...]]` | Spawn a registered entity type at the given world position; optionally attach an AI controller. C++ behaviors: `loiter [cx cy cz [radius_m [alt_m [throttle [cw\|ccw]]]]]`, `waypoint x y z [x y z ...] [--loop]`, `pursuit <entityIdx>`, `evade <entityIdx>`, `break <entityIdx> [rollDuration]`, `lead <entityIdx> [navGain]`, `lag <entityIdx> [lagFraction]`, `immelmann [pullDur] [rollDur]`, `split_s [rollDur] [pullDur]`, `high_yo_yo <entityIdx> [climbDur] [reacquireDur]`, `low_yo_yo <entityIdx> [diveDur] [pullDur]`. Lua behavior: `lua <script_name>` (loads `ai/<script_name>.lua` from content packs; see `docs/modding/ai.md`). If the entity type's TOML sets `ai_script`, that script is attached automatically when `--ai` is omitted. |
 | `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
 | `tp` | `<idx> <x> <y> <z>` | Teleport entity `<idx>` to world position; also used by the game client's game console to teleport the player entity |
-| `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `baseline_interval_ticks`, `jitter_buffer_depth`, `jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, `jitter_buffer_jitter_multiplier` (all jitter adaptive params take effect on the next sim tick for all connected peers) |
+| `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `baseline_interval_ticks`, `snapshot_budget_bytes`, `jitter_buffer_depth`, `jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, `jitter_buffer_jitter_multiplier` (all take effect on the next sim tick for all connected peers) |
 | `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
 | `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |
 | `pause` | — | Pause the simulation — ticks stop advancing; network connections remain active. In single-player the game client sends this automatically when the pause menu is opened. |

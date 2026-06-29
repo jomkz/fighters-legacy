@@ -41,6 +41,7 @@ struct ServerConfig {
     double planetRadiusM = 6'371'000.0;   // sphere radius (m); Earth default
     double drawDistanceKm = 200.0;        // per-peer interest radius (km); [1, 100000]
     uint32_t baselineIntervalTicks = 120; // full-snapshot baseline interval (sim ticks); [1, 3600]
+    uint32_t snapshotBudgetBytes = 1200;  // per-client snapshot byte budget; 0 = unlimited; [0, 65535] (#516)
     uint32_t jitterBufferDepth = 4;       // per-peer input queue depth (ticks); [1, 32]
     uint32_t jitterAdaptWindow = 60;      // EWMA smoothing window in ticks; [10, 3600]
     uint32_t jitterHysteresis = 2;        // resize dead-band in ticks; [0, 8]

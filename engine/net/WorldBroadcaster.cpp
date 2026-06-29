@@ -262,6 +262,7 @@ void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
     setIdleTimeout(cfg.idleTimeoutS);
     setDrawDistance(cfg.drawDistanceKm);
     setBaselineInterval(cfg.baselineIntervalTicks);
+    setSnapshotBudget(cfg.snapshotBudgetBytes);
     setJitterBufferDepth(cfg.jitterBufferMaxDepth);
     setJitterAdaptWindow(cfg.jitterAdaptWindow);
     setJitterHysteresis(cfg.jitterHysteresis);
@@ -278,6 +279,10 @@ void WorldBroadcaster::setDrawDistance(float km) noexcept {
 
 void WorldBroadcaster::setBaselineInterval(uint32_t ticks) noexcept {
     m_baselineIntervalTicks = ticks > 0u ? static_cast<uint64_t>(ticks) : 1u;
+}
+
+void WorldBroadcaster::setSnapshotBudget(uint32_t bytes) noexcept {
+    m_snapshotBudgetBytes.store(bytes, std::memory_order_relaxed);
 }
 
 void WorldBroadcaster::setJitterBufferDepth(uint32_t maxDepth) noexcept {
@@ -561,10 +566,28 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     for (auto& [peerId, peerEid] : m_peerEntities) {
         const EntityState* peerState = m_entityManager.get(peerEid);
 
+        auto& knownGens = m_peerKnownGens[peerId];
+
+        // Confirmed-despawn detection (#516), BEFORE the baseline clear (which would otherwise hide
+        // kills on baseline ticks). An entity this peer knew that is absent from the live snapMap was
+        // removed from the sim entirely (kill/despawn) — queue an explicit despawn so the client drops
+        // it promptly rather than waiting out the retention timeout. Entities still alive but merely
+        // out of interest stay in snapMap and are left for the client timeout, not despawned here.
+        {
+            auto& pending = m_peerPendingDespawn[peerId];
+            for (auto it = knownGens.begin(); it != knownGens.end();) {
+                if (snapMap.find(it->first) == snapMap.end()) {
+                    pending[it->first] = kDespawnRepeatTicks;
+                    it = knownGens.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+
         // Baseline tick: clear known-gen map → forces full entries for all visible entities,
         // providing UDP packet-loss recovery within baselineIntervalTicks ticks.
         const bool isBaseline = (tickIndex % m_baselineIntervalTicks == 0);
-        auto& knownGens = m_peerKnownGens[peerId];
         if (isBaseline)
             knownGens.clear();
 
@@ -606,17 +629,72 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             std::sort(visible.begin(), visible.end());
         }
 
+        // Priority/budget scheduling (#516). When a per-client byte budget is set, rank the visible
+        // entities by relevance (distance / closing-speed / recency / player-owned) and keep only the
+        // highest-priority set that fits; the rest are deferred to a later tick. budget == 0 keeps the
+        // legacy behaviour (every visible entity, ascending idx). The own entity is always admitted.
+        std::vector<uint32_t> selected;
+        const uint32_t budget = m_snapshotBudgetBytes.load(std::memory_order_relaxed);
+        if (budget == 0u || visible.size() <= 1u) {
+            selected = visible;
+        } else {
+            // Reserve fixed overhead (header + TLV block) out of the budget for the record bitstream.
+            constexpr uint32_t kFixedOverhead = sizeof(MsgWorldSnapshotHeader) + 32u;
+            const uint32_t recordBudget = budget > kFixedOverhead ? budget - kFixedOverhead : 1u;
+            const double px = peerState->transform.pos[0];
+            const double py = peerState->transform.pos[1];
+            const double pz = peerState->transform.pos[2];
+            std::vector<SnapshotCandidate> cands;
+            cands.reserve(visible.size());
+            for (uint32_t idx : visible) {
+                const EntitySnap& snap = snapMap.at(idx);
+                const EntityState& st = *snap.state;
+                SnapshotCandidate c;
+                c.idx = idx;
+                const double dx = st.transform.pos[0] - px, dy = st.transform.pos[1] - py,
+                             dz = st.transform.pos[2] - pz;
+                c.distSq = dx * dx + dy * dy + dz * dz;
+                // Closing speed: range rate toward the peer (positive = approaching). r_hat points
+                // peer→entity; closing = dot(peerVel - entityVel, r_hat).
+                const double dist = std::sqrt(c.distSq);
+                if (dist > 1e-3) {
+                    const double rx = dx / dist, ry = dy / dist, rz = dz / dist;
+                    const double rvx = static_cast<double>(peerState->transform.vel[0]) - st.transform.vel[0];
+                    const double rvy = static_cast<double>(peerState->transform.vel[1]) - st.transform.vel[1];
+                    const double rvz = static_cast<double>(peerState->transform.vel[2]) - st.transform.vel[2];
+                    c.closingSpeed = static_cast<float>(rvx * rx + rvy * ry + rvz * rz);
+                }
+                c.isOwn = (st.id.index == peerEid.index && st.id.generation == peerEid.generation);
+                c.playerOwned = st.playerOwned;
+                const uint16_t gen = static_cast<uint16_t>(st.id.generation);
+                auto kit = knownGens.find(idx);
+                c.ticksSinceSent = (kit == knownGens.end()) ? UINT64_MAX : (tickIndex - kit->second.lastSentTick);
+                const bool isFull =
+                    (kit == knownGens.end() || kit->second.gen != gen || c.ticksSinceSent >= kSnapshotRetentionTicks);
+                // Conservative idx-delta of 2 (1-byte varint); the real neighbour gap is unknown until
+                // after selection, but the budget is a soft cap so a per-record ±1 byte is acceptable.
+                c.estBytes = estimateRecordBytes(isFull, isFull, c.isOwn, st.typeIndex, /*idxDelta=*/2u);
+                cands.push_back(c);
+            }
+            selected = selectSnapshotRecords(cands, recordBudget, m_schedulerWeights, m_drawDistanceM);
+            std::sort(selected.begin(), selected.end()); // ascending for the codec's idx-delta varints
+        }
+
         // Encode the quantized, bit-packed record stream (SnapshotCodec). A record is `full` (carries
-        // typeIndex + gen) when the peer has not seen this entity/gen before; otherwise a delta
-        // (gen + typeIndex omitted). Omega is sent only for the peer's own entity.
+        // typeIndex + gen) when the peer has not seen this entity/gen before, the generation changed,
+        // or the peer has not been sent it within kSnapshotRetentionTicks (it may have evicted the
+        // entity, so a delta would be undecodable); otherwise a delta. Omega is sent only for own.
         BitWriter writer;
         uint32_t prevIdx = 0;
-        for (uint32_t idx : visible) {
+        for (uint32_t idx : selected) {
             const EntitySnap& snap = snapMap.at(idx);
             const EntityState& state = *snap.state;
             const uint16_t gen = static_cast<uint16_t>(state.id.generation);
             auto kit = knownGens.find(idx);
-            const bool isFull = (kit == knownGens.end() || kit->second != gen);
+            const uint64_t ticksSinceSent =
+                (kit == knownGens.end()) ? UINT64_MAX : (tickIndex - kit->second.lastSentTick);
+            const bool isFull =
+                (kit == knownGens.end() || kit->second.gen != gen || ticksSinceSent >= kSnapshotRetentionTicks);
 
             QuantEntity qe;
             qe.idx = state.id.index;
@@ -644,7 +722,7 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             qe.abEngaged = snap.abEngaged != 0u;
             qe.playerOwned = state.playerOwned;
             encodeRecord(writer, qe, prevIdx, hdr.frameOrigin, /*sendGen=*/isFull);
-            knownGens[idx] = gen;
+            knownGens[idx] = {gen, tickIndex};
             ++hdr.recordCount;
         }
         writer.alignToByte();
@@ -665,6 +743,21 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
                     static_cast<uint16_t>(std::min(it->second.estimatedDelayTicks, uint32_t{65535u}));
                 appendExt(buf, static_cast<uint16_t>(ExtTag::SnapshotPeerDelayTicks), delayTicks);
             }
+        }
+        // Explicit despawn TLV (#516): indices the peer knew that left the sim. Repeated for a few
+        // ticks (drop tolerance on the unreliable channel), decrementing each entry's remaining count.
+        if (auto pit = m_peerPendingDespawn.find(peerId); pit != m_peerPendingDespawn.end() && !pit->second.empty()) {
+            std::vector<uint32_t> ids;
+            ids.reserve(pit->second.size());
+            for (auto it = pit->second.begin(); it != pit->second.end();) {
+                ids.push_back(it->first);
+                if (--(it->second) == 0u)
+                    it = pit->second.erase(it);
+                else
+                    ++it;
+            }
+            appendExtRaw(buf, static_cast<uint16_t>(ExtTag::SnapshotDespawn), ids.data(),
+                         static_cast<uint16_t>(ids.size() * sizeof(uint32_t)));
         }
         m_net.send(peerId, buf.data(), buf.size(), /*reliable=*/false);
     }
@@ -829,6 +922,7 @@ void WorldBroadcaster::onDisconnect(uint32_t peerId) {
     m_peerInputs.erase(peerId);
     m_peerFloodState.erase(peerId);
     m_peerKnownGens.erase(peerId);
+    m_peerPendingDespawn.erase(peerId);
     m_activePeerCount.fetch_sub(1, std::memory_order_relaxed);
 
     m_pendingAdminDrains.erase(std::remove_if(m_pendingAdminDrains.begin(), m_pendingAdminDrains.end(),

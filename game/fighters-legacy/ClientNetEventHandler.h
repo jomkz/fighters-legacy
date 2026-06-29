@@ -5,6 +5,7 @@
 #include "INetwork.h"
 #include "RenderTypes.h"
 #include "SessionStatus.h"
+#include "render/RenderSnapshot.h" // EntityRenderEntry (stored by value in the retention cache)
 
 #include <algorithm>
 #include <atomic>
@@ -155,6 +156,17 @@ struct ClientNetEventHandler : INetworkEventHandler {
         uint32_t typeIndex;
     };
     std::unordered_map<uint32_t, KnownEntityInfo> m_knownEntities;
+
+    // Entity retention cache (#516). The priority/budget scheduler omits low-priority entities from
+    // some snapshots, so the rendered set must persist across packets rather than be rebuilt per
+    // packet. Each entry holds the last-known render state and the tick it was last updated; entries
+    // absent from a snapshot are retained until either an explicit SnapshotDespawn TLV removes them or
+    // they age out past kSnapshotRetentionTicks (the backstop for interest-out / lost despawns).
+    struct CachedEntity {
+        fl::EntityRenderEntry re;
+        uint64_t lastSeenTick{0};
+    };
+    std::unordered_map<uint32_t, CachedEntity> m_entityCache;
 };
 
 } // namespace fl
