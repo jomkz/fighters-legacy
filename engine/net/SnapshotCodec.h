@@ -78,4 +78,13 @@ void encodeRecord(BitWriter& w, const QuantEntity& e, uint32_t& prevIdx, const d
 [[nodiscard]] bool decodeRecord(BitReader& r, QuantEntity& out, uint32_t& prevIdx, const double origin[3],
                                 bool& genPresent);
 
+// Estimated encoded size in bytes of one record with the given shape — the byte cost the priority/
+// budget scheduler (#516) accounts per candidate. Mirrors encodeRecord's bit layout exactly; the two
+// varints (idx delta, typeIndex) are the only value-dependent parts. Pass the real idxDelta/typeIndex
+// when known; for pre-ordering budgeting pass a conservative idxDelta (the neighbor gap isn't known
+// until after selection). Returns ceil(bits/8) — a per-record upper bound (the stream is byte-aligned
+// once at the end), so summing it over admitted records never under-counts the encoded size.
+[[nodiscard]] uint32_t estimateRecordBytes(bool isFull, bool sendGen, bool hasOmega, uint32_t typeIndex,
+                                           uint32_t idxDelta) noexcept;
+
 } // namespace fl

@@ -89,6 +89,10 @@ agree bit-for-bit):
 
 ## Relationship to the rest of Epic B
 
-This change is the encoding layer only. The per-client priority/budget snapshot scheduler (#516),
-client-acked delta baselines (#517), and adaptive send-rate/congestion response (#518) build on top
-of this codec and remain separate sub-tasks of #495.
+This change is the encoding layer only. The per-client priority/budget snapshot scheduler (#516 —
+landed) builds directly on top: it reuses `estimateRecordBytes()` (added here, mirroring the encoder's
+bit layout) to fit the highest-relevance records into a per-client byte budget, and adds the
+`SnapshotDespawn` TLV + client-side entity retention so budget-deferred entities don't flicker. See
+`engine/net/SnapshotScheduler.{h,cpp}` and [network-protocol.md](network-protocol.md). Client-acked
+delta baselines (#517) and adaptive send-rate/congestion response (#518) build on this codec and the
+scheduler, and remain separate sub-tasks of #495.

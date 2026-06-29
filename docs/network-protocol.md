@@ -467,6 +467,7 @@ Helpers: `fl::findExt`, `fl::readExtValue<T>`, `fl::appendExt<T>`, `fl::appendEx
 | `SnapshotPeerCount` | `0x0100` | `uint16_t` | `MsgWorldSnapshot` | Active connected peer count at the time the snapshot was built. Emitted by `WorldBroadcaster` every tick; stored by `ClientNetEventHandler::serverPeerCount()`. |
 | `SnapshotPeerLatency` | `0x0101` | `uint16_t` | `MsgWorldSnapshot` | Receiving peer's estimated one-way latency in ms (`estimatedDelayTicks × 1000 / 60`), capped at 65535. Absent when `estimatedDelayTicks == 0` (e.g. single-player localhost). Stored by `ClientNetEventHandler::snapshotLatencyMs()`; displayed in `FlightHud` as a compact `"42 ms"` indicator. |
 | `SnapshotPeerDelayTicks` | `0x0102` | `uint16_t` | `MsgWorldSnapshot` | Raw `estimatedDelayTicks` (tick count, not ms). Companion to `SnapshotPeerLatency`; avoids the ms-rounding loss inherent in `ticks → ms → ticks` conversion. Used by `ClientPrediction` as the replay-depth signal for client-side prediction. Absent when `estimatedDelayTicks == 0`. |
+| `SnapshotDespawn` | `0x0103` | `uint32_t[]` | `MsgWorldSnapshot` | Indices of entities the receiving peer *knew* that were removed from the sim entirely (kills/despawns) — **not** entities that merely left the interest radius (those rely on the client retention timeout). Variable length = `4 × count`, little-endian; read **per element via `memcpy`** (the payload is unaligned). Omitted when empty. Repeated for `kDespawnRepeatTicks` (≈4) ticks for drop tolerance on the unreliable channel. The client (`ClientNetEventHandler`) applies despawns *before* upserting the same packet's records, so a kill-then-reuse-same-idx resolves to the new entity. Priority/budget scheduler (#516). |
 
 **Reserved ranges:**
 - `0x0000`: reserved
@@ -575,12 +576,20 @@ entities within `draw_distance_km` of the peer's own entity position (via
 `MsgWeatherState` and `MsgServerNotice` remain global broadcasts.
 
 **Delta compression**: each record carries a `full` bit. A `full` record (typeIndex + generation)
-is sent the first time a peer sees an entity, on generation change, and on the periodic baseline
-tick (`baseline_interval_ticks`, default 120 = 2 s at 60 Hz, for UDP packet-loss recovery); every
-other tick the entity is a delta record that omits typeIndex (and the generation when unchanged).
+is sent the first time a peer sees an entity, on generation change, on the periodic baseline
+tick (`baseline_interval_ticks`, default 120 = 2 s at 60 Hz, for UDP packet-loss recovery), and when
+the entity has not been sent to that peer within `kSnapshotRetentionTicks` (the budget-deferral
+re-entry case, #516); every other tick the entity is a delta record that omits typeIndex (and the
+generation when unchanged).
 
-Configure via `[world] draw_distance_km` and `[world] baseline_interval_ticks` in
-`server.toml`; hot-reloadable via `reload_config`.
+**Priority/budget cap (#516)**: with `[world] snapshot_budget_bytes` set (default 1200, 0 = unlimited),
+the per-peer record set is no longer "everything within `draw_distance_km`" — it is the
+highest-relevance subset that fits the budget (see *Scaling to 128+* above), with the rest deferred to
+later ticks. The client retains deferred entities and is told of true removals via the `SnapshotDespawn`
+TLV.
+
+Configure via `[world] draw_distance_km`, `[world] baseline_interval_ticks`, and
+`[world] snapshot_budget_bytes` in `server.toml`; all hot-reloadable via `reload_config`.
 
 ### Position precision
 
@@ -610,10 +619,17 @@ this section are measured empirically by the `bot_swarm` load generator — see
   record, raising the single-fragment safe threshold from ~20 to ~55 entities.
 - **3D interest management (#402, Epic B — landed).** `WorldBroadcaster` applies an exact full-XYZ
   squared-distance gate over the conservative XZ cells returned by `SpatialIndex::queryRadius()`.
-- **Priority/budget snapshot scheduler (Epic B, #516 — planned).** Instead of "everything within
-  `draw_distance_km`," each client gets a **per-tick byte budget**; entities are ranked by
-  relevance (distance, threat, recency) and the highest-priority set that fits is sent. Keeps
-  per-client bandwidth bounded as population grows.
+- **Priority/budget snapshot scheduler (Epic B, #516 — landed).** Instead of "everything within
+  `draw_distance_km`," each client gets a **per-tick byte budget** (`[world] snapshot_budget_bytes`,
+  default 1200, 0 = unlimited; hot-reloadable). `engine/net/SnapshotScheduler` ranks the visible
+  entities by relevance (distance, closing-speed, recency, player-owned) and sends only the
+  highest-priority set that fits; a recency term guarantees eventual inclusion of every visible
+  entity, and the peer's own entity is always sent. Keeps per-client bandwidth bounded as population
+  grows. Because a budgeted snapshot omits low-priority entities, the **client retains entity state
+  across snapshots** (`ClientNetEventHandler`), evicting an entry only on an explicit `SnapshotDespawn`
+  TLV (confirmed kill/removal) or after `kSnapshotRetentionTicks` (~3 s) with no update (the
+  interest-out / lost-despawn backstop). The server force-sends a *full* record when it has not sent a
+  known entity within that window, so a returning entity is decodable after the client evicted it.
 - **Client-acked delta baselines (Epic B, #517 — planned).** Replace the fixed
   `baseline_interval_ticks` re-sync with client-acknowledged baselines, so full re-sends happen
   only when a client actually needs recovery.

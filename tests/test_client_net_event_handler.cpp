@@ -15,6 +15,7 @@
 #include "net/BitStream.h"
 #include "net/GameProtocol.h"
 #include "net/SnapshotCodec.h"
+#include "net/SnapshotScheduler.h" // kSnapshotRetentionTicks
 #include "net/WireCodec.h"
 
 #include "SessionStatus.h"
@@ -1443,7 +1444,11 @@ TEST_CASE("ClientNetEventHandler: MsgEntityUpdate skipped when entityGen mismatc
         handler.onReceive(0u, pkt.data(), pkt.size());
     }
     bridge.tryAdvance();
-    CHECK(bridge.current().entries.empty()); // skipped
+    // The stale-gen delta is ignored; under entity retention (#516) the previously-cached gen=1
+    // entity persists with its last-known state rather than vanishing.
+    REQUIRE(bridge.current().entries.size() == 1u);
+    CHECK(bridge.current().entries[0].entityIdx == 3u);
+    CHECK(bridge.current().entries[0].entityGen == 1u);
 }
 
 TEST_CASE("ClientNetEventHandler: SnapshotPeerCount TLV at correct offset after full+update records",
@@ -1661,4 +1666,165 @@ TEST_CASE("ClientNetEventHandler: snapshotCallback called before publishExternal
     CHECK(callbackFired == 1);
     bridge.tryAdvance();
     CHECK(bridge.hasSnapshot()); // published after callback
+}
+
+// ---------------------------------------------------------------------------
+// Entity retention + despawn (priority/budget scheduler, #516)
+// ---------------------------------------------------------------------------
+
+// Append a SnapshotDespawn TLV (uint32[] of indices) to a snapshot packet built by buildSnapshotPkt.
+static void appendDespawnTlv(std::vector<uint8_t>& pkt, const std::vector<uint32_t>& ids) {
+    fl::appendExtRaw(pkt, static_cast<uint16_t>(fl::ExtTag::SnapshotDespawn), ids.data(),
+                     static_cast<uint16_t>(ids.size() * sizeof(uint32_t)));
+}
+
+static bool entriesContain(const fl::RenderSnapshot& snap, uint32_t idx) {
+    for (const auto& e : snap.entries)
+        if (e.entityIdx == idx)
+            return true;
+    return false;
+}
+
+TEST_CASE("ClientNetEventHandler: budget-deferred entity is retained across snapshots",
+          "[client_net_event_handler][retention]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // Tick 1: learn entities 1 and 2 (full records).
+    TestRec a, b;
+    a.idx = 1u;
+    a.gen = 1u;
+    a.typeIndex = 5u;
+    a.isFull = true;
+    b.idx = 2u;
+    b.gen = 1u;
+    b.typeIndex = 5u;
+    b.isFull = true;
+    auto pkt1 = buildSnapshotPkt(1u, {a, b});
+    handler.onReceive(0u, pkt1.data(), pkt1.size());
+
+    // Tick 2: only entity 1 is sent (entity 2 is budget-deferred this tick).
+    TestRec aDelta;
+    aDelta.idx = 1u;
+    aDelta.gen = 1u;
+    aDelta.isFull = false;
+    auto pkt2 = buildSnapshotPkt(2u, {aDelta});
+    handler.onReceive(0u, pkt2.data(), pkt2.size());
+
+    bridge.tryAdvance();
+    // Entity 2 is retained even though it was absent from the second snapshot (no flicker).
+    CHECK(entriesContain(bridge.current(), 1u));
+    CHECK(entriesContain(bridge.current(), 2u));
+}
+
+TEST_CASE("ClientNetEventHandler: SnapshotDespawn TLV removes the entity from the render set",
+          "[client_net_event_handler][retention]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    TestRec a, b;
+    a.idx = 1u;
+    a.gen = 1u;
+    a.typeIndex = 5u;
+    a.isFull = true;
+    b.idx = 2u;
+    b.gen = 1u;
+    b.typeIndex = 5u;
+    b.isFull = true;
+    auto pkt1 = buildSnapshotPkt(1u, {a, b});
+    handler.onReceive(0u, pkt1.data(), pkt1.size());
+
+    // Tick 2: entity 1 only, plus an explicit despawn of entity 2.
+    TestRec aDelta;
+    aDelta.idx = 1u;
+    aDelta.gen = 1u;
+    aDelta.isFull = false;
+    auto pkt2 = buildSnapshotPkt(2u, {aDelta});
+    appendDespawnTlv(pkt2, {2u});
+    handler.onReceive(0u, pkt2.data(), pkt2.size());
+
+    bridge.tryAdvance();
+    CHECK(entriesContain(bridge.current(), 1u));
+    CHECK_FALSE(entriesContain(bridge.current(), 2u)); // explicitly despawned
+}
+
+TEST_CASE("ClientNetEventHandler: despawn applied before upsert so same-idx respawn survives",
+          "[client_net_event_handler][retention]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // Tick 1: entity 3 at generation 1.
+    TestRec gen1;
+    gen1.idx = 3u;
+    gen1.gen = 1u;
+    gen1.typeIndex = 5u;
+    gen1.isFull = true;
+    auto pkt1 = buildSnapshotPkt(1u, {gen1});
+    handler.onReceive(0u, pkt1.data(), pkt1.size());
+
+    // Tick 2: slot 3 reused — despawn of old gen + full record of the new gen 2 in ONE packet. The
+    // despawn must be applied before the record upsert so the new entity is not deleted.
+    TestRec gen2;
+    gen2.idx = 3u;
+    gen2.gen = 2u;
+    gen2.typeIndex = 5u;
+    gen2.isFull = true;
+    auto pkt2 = buildSnapshotPkt(2u, {gen2});
+    appendDespawnTlv(pkt2, {3u});
+    handler.onReceive(0u, pkt2.data(), pkt2.size());
+
+    bridge.tryAdvance();
+    REQUIRE(entriesContain(bridge.current(), 3u));
+    for (const auto& e : bridge.current().entries)
+        if (e.entityIdx == 3u)
+            CHECK(e.entityGen == 2u); // the respawned entity, not the deleted one
+}
+
+TEST_CASE("ClientNetEventHandler: retained entity ages out after the retention window",
+          "[client_net_event_handler][retention]") {
+    fl::SimRenderBridge bridge;
+    fl::EntityTypeRegistry registry;
+    MockLogger logger;
+    MockNetwork net;
+    EnvironmentState env{};
+    ClientNetEventHandler handler(bridge, registry, logger, net, env);
+
+    // Tick 1: learn entities 1 and 2.
+    TestRec a, b;
+    a.idx = 1u;
+    a.gen = 1u;
+    a.typeIndex = 5u;
+    a.isFull = true;
+    b.idx = 2u;
+    b.gen = 1u;
+    b.typeIndex = 5u;
+    b.isFull = true;
+    auto pkt1 = buildSnapshotPkt(1u, {a, b});
+    handler.onReceive(0u, pkt1.data(), pkt1.size());
+
+    // Keep sending only entity 1 well past the retention window; entity 2 must eventually age out.
+    for (uint64_t tick = 2; tick <= fl::kSnapshotRetentionTicks + 5u; ++tick) {
+        TestRec aDelta;
+        aDelta.idx = 1u;
+        aDelta.gen = 1u;
+        aDelta.isFull = false;
+        auto pkt = buildSnapshotPkt(tick, {aDelta});
+        handler.onReceive(0u, pkt.data(), pkt.size());
+    }
+
+    bridge.tryAdvance();
+    CHECK(entriesContain(bridge.current(), 1u));
+    CHECK_FALSE(entriesContain(bridge.current(), 2u)); // evicted by the retention timeout
 }

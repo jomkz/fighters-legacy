@@ -352,8 +352,12 @@ enum class ExtTag : uint16_t {
     SnapshotPeerLatency = 0x0101, // uint16_t: receiving peer's one-way latency in ms (estimatedDelayTicks*1000/60);
                                   // absent when delay is 0
     SnapshotPeerDelayTicks =
-        0x0102, // uint16_t: raw estimatedDelayTicks for client-side prediction replay depth;
-                // avoids ms rounding loss; absent when delay is 0; emitted alongside SnapshotPeerLatency
+        0x0102,               // uint16_t: raw estimatedDelayTicks for client-side prediction replay depth;
+                              // avoids ms rounding loss; absent when delay is 0; emitted alongside SnapshotPeerLatency
+    SnapshotDespawn = 0x0103, // uint32_t[]: indices of entities the receiving peer KNEW that were removed from the sim
+                              // (kills/despawns, not interest-out); priority/budget scheduler (#516). Variable length =
+                              // 4*count; little-endian; read per-element via memcpy (payload is unaligned). Empty =
+                              // omitted. Repeated for a few ticks on the unreliable channel for drop tolerance.
 };
 
 } // namespace fl

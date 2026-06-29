@@ -5,6 +5,7 @@
 #include "GameProtocol.h"
 #include "INetwork.h"
 #include "JitterBuffer.h"
+#include "SnapshotScheduler.h"
 #include "entity/EntityId.h"
 #include "flight/IGravityField.h"
 #include "loop/ISimUpdate.h"
@@ -103,6 +104,7 @@ struct WorldBroadcasterConfig {
     int idleTimeoutS{0};                 // 0 = disabled; seconds of peer inactivity before disconnect
     float drawDistanceKm{200.f};         // per-peer interest radius; 0 = degenerate (empty snapshots)
     uint32_t baselineIntervalTicks{120}; // force full quantized records every N ticks for loss recovery
+    uint32_t snapshotBudgetBytes{0};     // per-client snapshot byte budget; 0 = unlimited (#516)
     uint32_t jitterBufferMaxDepth{4};    // per-peer input queue depth; [1, JitterBuffer::kHardMaxDepth]
     uint32_t jitterAdaptWindow{60};      // EWMA smoothing window in ticks; alpha = 1/window; [10, 3600]
     uint32_t jitterHysteresis{2};        // dead-band in ticks before resize fires; [0, 8]
@@ -331,6 +333,13 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Call before gameLoop.start() or via enqueueSimCallback.
     void setBaselineInterval(uint32_t ticks) noexcept;
 
+    // Set the per-client snapshot byte budget (#516). 0 = unlimited (legacy: send every visible
+    // entity). When non-zero, each peer's snapshot is capped at roughly this many bytes; the scheduler
+    // ranks visible entities by relevance (distance/threat/recency) and sends the highest-priority set
+    // that fits, deferring the rest to later ticks. Atomic / hot-reloadable; call before
+    // gameLoop.start() or via enqueueSimCallback (reload_config).
+    void setSnapshotBudget(uint32_t bytes) noexcept;
+
     // Set the global maximum jitter buffer depth (ticks). The actual per-peer initial depth is
     // min(estimatedDelayTicks, maxDepth), floored at 1. The adaptive resize loop in onTick
     // continuously adjusts per-peer depths within this bound. Thread-safe; may be called before
@@ -504,18 +513,34 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     TickProfiler m_tickProfiler;
 
     // Interest management + delta compression state (sim-thread only).
-    double m_drawDistanceM{200'000.0};         // precomputed from drawDistanceKm × 1000; 200 km default
-    uint64_t m_baselineIntervalTicks{120u};    // ticks between full-snapshot baselines for loss recovery
+    double m_drawDistanceM{200'000.0};      // precomputed from drawDistanceKm × 1000; 200 km default
+    uint64_t m_baselineIntervalTicks{120u}; // ticks between full-snapshot baselines for loss recovery
+    // Per-client snapshot byte budget (#516): 0 = unlimited (send every visible entity, legacy
+    // behaviour used by unit tests). fl-server sets a real budget; atomic so reload_config can mutate
+    // it (the read happens on the sim thread). The scheduler ranks visible entities by relevance and
+    // sends only the highest-priority set that fits.
+    std::atomic<uint32_t> m_snapshotBudgetBytes{0};
+    SchedulerWeights m_schedulerWeights{};     // relevance weights (tuned defaults; sim-thread only)
     std::atomic<uint32_t> m_jitterMaxDepth{4}; // global cap for per-peer jitter buffer initialization
     // Adaptive resize parameters — sim-thread only; hot-reloadable via enqueueSimCallback.
     uint32_t m_jitterAdaptWindow{60}; // EWMA smoothing window; alpha = 1/window
     uint32_t m_jitterHysteresis{2};   // dead-band ticks before resize fires
     float m_jitterMultiplier{2.0f};   // k factor in depth = ceil(ewma + k*jitter)
 
-    // Per-peer entity known-gen set: peerId → (entityIdx → last-sent generation, truncated uint16).
-    // Cleared at each baseline tick (forces full re-sync for all visible entities).
+    // Per-peer entity tracking: peerId → (entityIdx → {last-sent gen, last-sent tick}). The gen drives
+    // full-vs-delta selection; lastSentTick drives the scheduler's recency term and the
+    // force-full-on-re-entry rule. Cleared at each baseline tick; erased in full on peer disconnect.
+    struct PeerEntityRec {
+        uint16_t gen{0};
+        uint64_t lastSentTick{0};
+    };
+    std::unordered_map<uint32_t, std::unordered_map<uint32_t, PeerEntityRec>> m_peerKnownGens;
+
+    // Per-peer pending explicit despawns (#516): peerId → (entityIdx → remaining repeat ticks). An
+    // entity the peer knew that left the sim entirely (kill/despawn) is queued here and emitted in the
+    // SnapshotDespawn TLV for kDespawnRepeatTicks ticks (drop tolerance on the unreliable channel).
     // Erased in full on peer disconnect.
-    std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint16_t>> m_peerKnownGens;
+    std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint8_t>> m_peerPendingDespawn;
 
     // Shutdown countdown state (sim-thread only).
     bool m_shuttingDown{false};

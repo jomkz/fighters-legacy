@@ -10,6 +10,7 @@
 #include "net/BitStream.h"
 #include "net/GameProtocol.h"
 #include "net/SnapshotCodec.h"
+#include "net/SnapshotScheduler.h" // kSnapshotRetentionTicks
 #include "net/WireCodec.h"
 #include "render/RenderSnapshot.h"
 #include "render/SimRenderBridge.h"
@@ -98,11 +99,32 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
         if (!fl::readMsg(data, size, hdr))
             return;
 
-        fl::RenderSnapshot snap;
-        snap.tickIndex = hdr.tickIndex;
-        snap.entries.reserve(hdr.recordCount);
+        // The priority/budget scheduler (#516) may omit low-priority entities from any given
+        // snapshot, so the rendered set is a persistent cache (m_entityCache) updated by each packet,
+        // not rebuilt from scratch. Order of operations:
+        //   1. Apply the SnapshotDespawn TLV first (so a kill-then-reuse-same-idx, where the despawn of
+        //      the old gen and the full record of the new gen share one packet, resolves to the new
+        //      entity rather than deleting it).
+        //   2. Decode + upsert this packet's records.
+        //   3. Age out entries not seen within kSnapshotRetentionTicks (interest-out / lost despawns).
+        //   4. Build the RenderSnapshot from the whole cache.
+        const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) + hdr.bitstreamBytes;
+        const uint8_t* ext = (size > extOffset) ? static_cast<const uint8_t*>(data) + extOffset : nullptr;
+        const std::size_t extSz = (size > extOffset) ? size - extOffset : 0u;
 
-        // Decode the quantized record bitstream. Positions are relative to hdr.frameOrigin; full
+        // 1. Explicit despawns (applied before record upsert).
+        if (ext) {
+            uint16_t despawnLen{};
+            const uint8_t* dp = fl::findExt(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotDespawn), despawnLen);
+            for (uint16_t off = 0; dp && off + 4u <= despawnLen; off += 4u) {
+                uint32_t idx{};
+                std::memcpy(&idx, dp + off, 4u); // payload is unaligned — read per element
+                m_entityCache.erase(idx);
+                m_knownEntities.erase(idx);
+            }
+        }
+
+        // 2. Decode the quantized record bitstream. Positions are relative to hdr.frameOrigin; full
         // records carry typeIndex + gen, deltas reuse the per-entity cache (m_knownEntities).
         const std::size_t bodyAvail = (size >= sizeof(hdr)) ? (size - sizeof(hdr)) : 0u;
         const std::size_t bodyBytes = std::min<std::size_t>(hdr.bitstreamBytes, bodyAvail);
@@ -143,15 +165,31 @@ void ClientNetEventHandler::onReceive(uint32_t /*peerId*/, const void* data, std
             re.abEngaged = qe.abEngaged;
             re.engineFailFlags = qe.engineFailFlags;
             re.omega = {qe.omega[0], qe.omega[1], qe.omega[2]};
-            snap.entries.push_back(re);
+            m_entityCache[qe.idx] = {re, hdr.tickIndex};
         }
 
-        // TLV extension block follows the quantized bitstream.
-        const std::size_t extOffset = sizeof(fl::MsgWorldSnapshotHeader) + hdr.bitstreamBytes;
-        if (size > extOffset) {
-            const auto* ext = static_cast<const uint8_t*>(data) + extOffset;
-            const auto extSz = size - extOffset;
+        // 3. Age out entities not refreshed within the retention window (the backstop for interest-out
+        // and dropped despawn packets). Evict from both caches together.
+        for (auto it = m_entityCache.begin(); it != m_entityCache.end();) {
+            const uint64_t age =
+                (hdr.tickIndex >= it->second.lastSeenTick) ? (hdr.tickIndex - it->second.lastSeenTick) : 0u;
+            if (age > fl::kSnapshotRetentionTicks) {
+                m_knownEntities.erase(it->first);
+                it = m_entityCache.erase(it);
+            } else {
+                ++it;
+            }
+        }
 
+        // 4. Build the RenderSnapshot from the retained cache.
+        fl::RenderSnapshot snap;
+        snap.tickIndex = hdr.tickIndex;
+        snap.entries.reserve(m_entityCache.size());
+        for (const auto& [idx, cached] : m_entityCache)
+            snap.entries.push_back(cached.re);
+
+        // Remaining TLVs (order-independent).
+        if (ext) {
             uint16_t pc{};
             if (fl::readExtValue(ext, extSz, static_cast<uint16_t>(fl::ExtTag::SnapshotPeerCount), pc))
                 m_serverPeerCount.store(pc, std::memory_order_relaxed);
