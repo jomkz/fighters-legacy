@@ -93,7 +93,7 @@ RSS_START="$(ps -o rss= -p "$SERVER_PID" 2>/dev/null | tr -d ' ' || true)"
 set +e
 "$BOTSWARM" 127.0.0.1 "$PORT" \
     --clients "$CLIENTS" --duration "$DURATION" --pattern "$PATTERN" \
-    --json "$REPORT" --server-metrics "$METRICS" "${EXTRA_ARGS[@]}"
+    --json "$REPORT" --server-metrics "$METRICS" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 STATUS=$?
 set -e
 
