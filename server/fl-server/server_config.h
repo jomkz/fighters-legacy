@@ -50,6 +50,15 @@ struct ServerConfig {
     float congestionMinSendHz = 10.0f;         // floor send rate under congestion; [1, 60]
     float congestionLossThreshold = 0.02f;     // ENet mean loss fraction => congested; [0, 1]
     uint32_t congestionBudgetFloorBytes = 400; // never scale a set byte budget below this; [0, 65535]
+    // Graceful tick-overrun governor (#514). Sheds snapshot/AI work when the tick exceeds budget under
+    // load. Hot-reloadable via reload_config, except maxCatchupTicks (a GameLoop ctor value).
+    bool overrunGovernorEnabled = true;     // false = no degradation (loadFactor pinned to 1)
+    float overrunHighWatermark = 0.90f;     // EWMA tick-ms / budget that triggers shedding; [0.1, 1.0]
+    float overrunLowWatermark = 0.60f;      // recovery threshold (dead-band below high); [0.0, high)
+    float overrunMinSnapshotHz = 15.0f;     // floor broadcast rate under overrun; [1, 60]
+    uint32_t overrunMaxAiStride = 4;        // deepest AI-sample decimation; [1, 32]
+    uint32_t overrunBudgetFloorBytes = 400; // never scale the snapshot budget below this; [0, 65535]
+    int maxCatchupTicks = 8;                // GameLoop catch-up cap (spiral backstop); [1, 64]; restart
     // Sim-tick CPU parallelism: total worker threads for the per-entity AI + integrate passes,
     // including the sim thread. 0 = auto (hardware_concurrency), 1 = serial. CPU knob, NOT a
     // capacity guarantee. CLI --sim-worker-threads overrides this. [0, 256]

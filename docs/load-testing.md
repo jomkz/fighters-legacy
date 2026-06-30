@@ -114,6 +114,26 @@ count, so only throughput changes.
 [#511]: https://github.com/fighters-legacy/fighters-legacy/issues/511
 [#512]: https://github.com/fighters-legacy/fighters-legacy/issues/512
 
+### Validating graceful overrun ([#514])
+
+The `run_loadtest.sh`/`.ps1` scale-gate config sets `overrun_governor_enabled = false` so the gate
+measures **raw** sim/bandwidth capacity against the committed baseline (an active governor would shed
+work and mask regressions). To observe the governor itself, run a *separate* overload with it enabled
+(its production default) — push past the tick-Hz knee (raise the client count, or pin few cores with
+`taskset -c 0-3`) and watch the authoritative `server_tick` block and `status`/`tickstats`:
+
+- `load_factor` falls below `1.0` and `status` shows `[DEGRADED]` as the EWMA tick-ms crosses the
+  high-watermark;
+- effective snapshot Hz drops (per-client KB/s falls) and the AI stride rises;
+- `dropped_ticks` should stay **near zero** — the governor shed work *before* the `GameLoop`
+  catch-up cap engaged. A rising `dropped_ticks` means the sim is integrate-bound (the one cost the
+  governor cannot shed) and is dilating time, the honest worst case.
+
+`reload_config` toggling `overrun_governor_enabled` mid-run flips the levers live (full rate ⇄
+degraded), useful for an A/B in a single session.
+
+[#514]: https://github.com/fighters-legacy/fighters-legacy/issues/514
+
 ## CLI
 
     bot_swarm [host] [port] [options]

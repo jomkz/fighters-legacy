@@ -267,6 +267,7 @@ void WorldBroadcaster::applyConfig(const WorldBroadcasterConfig& cfg) {
     setJitterHysteresis(cfg.jitterHysteresis);
     setJitterMultiplier(cfg.jitterMultiplier);
     setCongestionParams(cfg.congestion);
+    setGovernorParams(cfg.governor);
 }
 
 void WorldBroadcaster::setIdleTimeout(int timeoutSeconds) noexcept {
@@ -299,6 +300,10 @@ void WorldBroadcaster::setJitterMultiplier(float k) noexcept {
 
 void WorldBroadcaster::setCongestionParams(const CongestionParams& params) noexcept {
     m_congestionParams = params;
+}
+
+void WorldBroadcaster::setGovernorParams(const TickGovernorParams& params) noexcept {
+    m_governorParams = params;
 }
 
 void WorldBroadcaster::forEachPeer(std::function<void(const PeerInfo&)> fn) const {
@@ -451,6 +456,18 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
         ps.congestion.update(tickIndex, sample);
     }
 
+    // Graceful tick-overrun governor (#514): step from the PREVIOUS tick's measured wall-time vs the
+    // fixed-step budget, then freeze its three lever values for this tick's parallel regions. configure()
+    // each tick so reload_config (m_governorParams) takes effect live, like the per-peer congestion
+    // controllers. Publish the levers into the atomics that getOverrunStatus() reads from the main thread.
+    m_tickGovernor.configure(m_governorParams);
+    m_tickGovernor.update(tickIndex, m_tickProfiler.lastTotalMs(), simDt * 1000.0);
+    const uint32_t govSnapInterval = m_tickGovernor.snapshotIntervalTicks();
+    const uint32_t govAiStride = m_tickGovernor.aiSampleStride();
+    m_overrunLoadFactor.store(m_tickGovernor.loadFactor(), std::memory_order_relaxed);
+    m_overrunSnapInterval.store(govSnapInterval, std::memory_order_relaxed);
+    m_overrunAiStride.store(govAiStride, std::memory_order_relaxed);
+
     m_tickProfiler.addPhaseSample(
         TickPhase::Maintenance, std::chrono::duration<double, std::milli>(m_clock->now() - tMaintenanceStart).count());
 
@@ -474,10 +491,22 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // EntityManager); each controller's own mutable state is per-entity / disjoint.
     {
         const auto tAiStart = m_clock->now();
-        runEntityPass(m_stepItems.size(), [this, tickIndex, simDt](size_t b, size_t e) {
+        runEntityPass(m_stepItems.size(), [this, tickIndex, simDt, govAiStride](size_t b, size_t e) {
             for (size_t i = b; i < e; ++i) {
                 const StepItem& it = m_stepItems[i];
-                m_stepInputs[i] = it.ce->controller->sample(*it.state, tickIndex, simDt, &m_spatialIndex);
+                // AI-sample decimation (#514): a decimatable (non-player) entity reuses its last sampled
+                // input on ticks where (tickIndex + idx) % stride != 0 — a pure function of (idx, tick,
+                // stride), so the skip pattern is identical across worker counts (serial-equivalent), and
+                // each worker writes only its own entity's lastInput cache (disjoint). Players (stride
+                // applies to all, but decimatable=false) and any entity not yet sampled always sample.
+                if (it.ce->decimatable && it.ce->lastInputValid && govAiStride > 1u &&
+                    ((tickIndex + it.idx) % govAiStride) != 0u) {
+                    m_stepInputs[i] = it.ce->lastInput;
+                } else {
+                    m_stepInputs[i] = it.ce->controller->sample(*it.state, tickIndex, simDt, &m_spatialIndex);
+                    it.ce->lastInput = m_stepInputs[i];
+                    it.ce->lastInputValid = true;
+                }
             }
         });
         m_tickProfiler.addPhaseSample(TickPhase::Ai,
@@ -604,10 +633,18 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
     // the workers see a frozen map structure (unordered_map keeps element pointers valid across later
     // rehashes). Decimated peers (#518) are excluded from the work set — a decimated tick mutates no
     // per-peer state, exactly matching the previous in-loop `continue`.
+    // Compose the per-peer congestion send-interval with the server-wide overrun-governor interval
+    // (#514): a peer is decimated by whichever lever spaces it out more. The governor-scaled static
+    // budget below is likewise the per-client budget after server-wide overrun shedding, fed into each
+    // peer's congestion budget lever. Both governor values are frozen sim-thread locals — the parallel
+    // build region never touches the governor object.
+    const uint32_t govStaticBudget =
+        m_tickGovernor.effectiveBudget(m_snapshotBudgetBytes.load(std::memory_order_relaxed));
     m_peerWork.clear();
     for (auto& [peerId, peerEid] : m_peerEntities) {
         PeerInputState& pin = m_peerInputs[peerId];
-        if (pin.sentSnapshot && tickIndex - pin.lastSnapshotSentTick < pin.congestion.sendIntervalTicks())
+        const uint32_t sendInterval = std::max(pin.congestion.sendIntervalTicks(), govSnapInterval);
+        if (pin.sentSnapshot && tickIndex - pin.lastSnapshotSentTick < sendInterval)
             continue; // adaptive send-rate decimation: too few ticks since the last send
         PeerSnapWork w;
         w.peerId = peerId;
@@ -703,8 +740,9 @@ void WorldBroadcaster::onTick(double simDt, uint64_t tickIndex) {
             // Congestion response (#518): scale the static byte budget by this peer's congestion throttle.
             // A static budget of 0 (unlimited) stays 0 here — under congestion only the send-rate lever
             // applies for unlimited-budget servers.
-            const uint32_t budget =
-                pin.congestion.effectiveBudget(m_snapshotBudgetBytes.load(std::memory_order_relaxed));
+            // govStaticBudget is the static per-client budget after server-wide overrun shedding (#514);
+            // the per-peer congestion lever (#518) then scales it further for this peer.
+            const uint32_t budget = pin.congestion.effectiveBudget(govStaticBudget);
             if (budget == 0u || visible.size() <= 1u) {
                 selected = visible;
             } else {
@@ -990,7 +1028,9 @@ void WorldBroadcaster::onConnect(uint32_t peerId) {
 
         // PeerController reads the peer's stable input slot (pointer valid across rehash, slot torn
         // down after the controller on disconnect). Start at throttle 0 so the entity is stationary.
-        addControlledEntity(id, std::make_unique<PeerController>(&m_peerInputs[peerId]), std::move(model), 0.0f);
+        // decimatable=false: a player's input must be sampled every tick for responsiveness (#514).
+        addControlledEntity(id, std::make_unique<PeerController>(&m_peerInputs[peerId]), std::move(model), 0.0f,
+                            /*decimatable=*/false);
     }
     sendConnectAck(peerId, id);
     if (!m_motd.empty()) {
@@ -1268,7 +1308,8 @@ std::shared_ptr<const FlightModelData> WorldBroadcaster::resolveFlightModel(Enti
 }
 
 void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityController> controller,
-                                           std::shared_ptr<const FlightModelData> model, float initialThrottle) {
+                                           std::shared_ptr<const FlightModelData> model, float initialThrottle,
+                                           bool decimatable) {
     const EntityState* st = m_entityManager.get(id);
     if (!st)
         return;
@@ -1286,12 +1327,15 @@ void WorldBroadcaster::addControlledEntity(EntityId id, std::unique_ptr<IEntityC
     auto fi = std::make_unique<FlightIntegrator>(model);
     fi->setGravityField(*m_gravity);
     fi->reset(fs);
-    m_controlledEntities[id.index] = ControlledEntity{id, std::move(fi), std::move(controller)};
+    ControlledEntity ce{id, std::move(fi), std::move(controller)};
+    ce.decimatable = decimatable;
+    m_controlledEntities[id.index] = std::move(ce);
 }
 
 void WorldBroadcaster::registerController(EntityId id, std::unique_ptr<IEntityController> controller,
                                           std::shared_ptr<const FlightModelData> model) {
-    addControlledEntity(id, std::move(controller), std::move(model), 0.f);
+    // AI/scripted entities are decimatable — their sample() may be skipped under tick overrun (#514).
+    addControlledEntity(id, std::move(controller), std::move(model), 0.f, /*decimatable=*/true);
 }
 
 // Grain size for the per-entity parallel passes: enough indices per chunk to amortise the

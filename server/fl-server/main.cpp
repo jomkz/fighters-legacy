@@ -416,6 +416,9 @@ int main(int argc, char** argv) {
     wbConfig.jitterMultiplier = cfg.jitterMultiplier;
     wbConfig.congestion = fl::makeCongestionParams(cfg.congestionEnabled, cfg.congestionMinSendHz,
                                                    cfg.congestionLossThreshold, cfg.congestionBudgetFloorBytes);
+    wbConfig.governor =
+        fl::makeTickGovernorParams(cfg.overrunGovernorEnabled, cfg.overrunHighWatermark, cfg.overrunLowWatermark,
+                                   cfg.overrunMinSnapshotHz, cfg.overrunMaxAiStride, cfg.overrunBudgetFloorBytes);
     broadcaster.applyConfig(wbConfig);
     // Planet gravity and terrain curvature. Function-scope static so lifetime outlasts the broadcaster.
     static fl::CentralGravityField s_gravity{6'371'000.f};
@@ -490,7 +493,7 @@ int main(int argc, char** argv) {
         aiScriptCache.emplace(name, std::pair<std::string, std::string>{std::move(src), std::move(root)});
     }
 
-    GameLoop gameLoop(broadcaster, *log);
+    GameLoop gameLoop(broadcaster, *log, 60.0, cfg.maxCatchupTicks);
 
     // Data-parallel sim tick: the worker pool that parallelises the per-entity AI + integrate
     // passes. Constructed before gameLoop.start() and outlives it (declared here in main's scope).
@@ -595,6 +598,7 @@ int main(int argc, char** argv) {
         log->log(LogLevel::Info, __FILE__, __LINE__, mbuf);
     }
 
+    uint64_t lastDroppedTicks = 0; // for the sim-overrun drop-rate Warn (#514)
     while (!g_quit) {
         {
             std::lock_guard<std::mutex> lk(stdinMutex);
@@ -614,9 +618,23 @@ int main(int argc, char** argv) {
         const double entityZ = broadcaster.cachedEntityZ();
         terrainStreamer.update(glm::dvec3(entityX, 0.0, entityZ));
 
+        // Sim-overrun drop signal (#514): when the GameLoop catch-up cap discards ticks, the sim is
+        // falling behind even after the governor sheds work — surface it. Checked each ~50 ms poll.
+        const uint64_t droppedTicks = gameLoop.totalDroppedTicks();
+        if (droppedTicks > lastDroppedTicks) {
+            char dbuf[96];
+            std::snprintf(dbuf, sizeof(dbuf), "sim overrun: %llu tick(s) dropped (total %llu)",
+                          static_cast<unsigned long long>(droppedTicks - lastDroppedTicks),
+                          static_cast<unsigned long long>(droppedTicks));
+            log->log(LogLevel::Warn, __FILE__, __LINE__, dbuf);
+            lastDroppedTicks = droppedTicks;
+        }
+
         if (!metricsPath.empty() && std::chrono::steady_clock::now() >= nextMetricsWrite) {
-            const fl::ServerTickReport rep = fl::makeServerTickReport(
-                broadcaster.getTickBudget(), broadcaster.getPeerCount(), entityManager.liveCount());
+            const fl::OverrunStatus ov = broadcaster.getOverrunStatus();
+            const fl::ServerTickReport rep =
+                fl::makeServerTickReport(broadcaster.getTickBudget(), broadcaster.getPeerCount(),
+                                         entityManager.liveCount(), ov.loadFactor, droppedTicks);
             fl::writeConfigFile(metricsPath, fl::toJson(rep) + "\n", *log);
             nextMetricsWrite = std::chrono::steady_clock::now() + metricsInterval;
         }

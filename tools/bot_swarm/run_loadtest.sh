@@ -70,6 +70,13 @@ pre_handshake_rate_limit_count = 0
 packet_flood_multiplier = 3
 max_connections_per_ip = 0
 
+[world]
+# The scale gate measures RAW sim/bandwidth capacity against the committed baseline, so the graceful
+# tick-overrun governor (#514) is disabled here — otherwise it would shed snapshot/AI work under load
+# and mask the very regressions the gate exists to catch (validating the governor itself is a separate
+# synthetic-overrun profile). The governor defaults ON in production server.toml.
+overrun_governor_enabled = false
+
 [metrics]
 tick_json_path = "$METRICS"
 tick_json_interval_ms = 250

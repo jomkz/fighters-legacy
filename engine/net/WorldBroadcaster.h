@@ -7,7 +7,9 @@
 #include "INetwork.h"
 #include "JitterBuffer.h"
 #include "SnapshotScheduler.h"
+#include "TickGovernor.h"
 #include "entity/EntityId.h"
+#include "flight/AeroForces.h"
 #include "flight/IGravityField.h"
 #include "loop/ISimUpdate.h"
 #include "perf/TickProfiler.h"
@@ -31,7 +33,6 @@ class EntityManager;
 class FlightIntegrator; // full definition in WorldBroadcaster.cpp
 class JobSystem;        // engine/job/JobSystem.h — full definition in WorldBroadcaster.cpp
 struct EntityState;
-struct ControlInput;      // engine/flight/AeroForces.h
 struct FlightModelData;   // engine/flight/FlightModelData.h
 struct IEntityController; // engine/entity/IEntityController.h
 class EntityTypeRegistry;
@@ -98,6 +99,9 @@ struct ControlledEntity {
     EntityId id;
     std::unique_ptr<FlightIntegrator> sim;
     std::unique_ptr<IEntityController> controller;
+    bool decimatable{false};    // AI/scripted entity whose sample() may be skipped under overrun; players never
+    ControlInput lastInput{};   // last sampled control input, reused on a decimated (skipped) AI tick
+    bool lastInputValid{false}; // false until the first sample() — forces a sample on the entity's first tick
 };
 
 // Pre-start scalar configuration. Bundles the init-time setters so callers configure rate limiting,
@@ -122,6 +126,16 @@ struct WorldBroadcasterConfig {
     uint32_t jitterHysteresis{2};     // dead-band in ticks before resize fires; [0, 8]
     float jitterMultiplier{2.0f};     // k factor: depth = ceil(ewma_delay + k*jitter); [0.0, 8.0]
     CongestionParams congestion{};    // per-client adaptive send-rate / congestion response (#518)
+    TickGovernorParams governor{};    // graceful tick-overrun governor (#514)
+};
+
+// Snapshot of the overrun governor's current degradation state — read cross-thread (fl-server main
+// thread) via getOverrunStatus(); backed by relaxed atomics published each tick by the sim thread.
+struct OverrunStatus {
+    float loadFactor{1.f};             // [floor, 1]; 1 = no degradation
+    uint32_t snapshotIntervalTicks{1}; // server-wide snapshot send spacing
+    uint32_t aiStride{1};              // AI sample() decimation stride
+    bool degraded{false};              // loadFactor < 1
 };
 
 // Wraps EntityManager to provide a server-side ISimUpdate that:
@@ -208,6 +222,18 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // read by the fl-server admin `status`/`tickstats` commands and the --metrics-json writer.
     TickBudget getTickBudget() const {
         return m_tickProfiler.snapshot();
+    }
+
+    // Current overrun-governor degradation state. Thread-safe (relaxed-atomic reads of values the sim
+    // thread publishes each tick) — read by the fl-server `status`/`tickstats` commands and the
+    // --metrics-json writer from the main thread.
+    OverrunStatus getOverrunStatus() const noexcept {
+        OverrunStatus s;
+        s.loadFactor = m_overrunLoadFactor.load(std::memory_order_relaxed);
+        s.snapshotIntervalTicks = m_overrunSnapInterval.load(std::memory_order_relaxed);
+        s.aiStride = m_overrunAiStride.load(std::memory_order_relaxed);
+        s.degraded = s.loadFactor < 1.f;
+        return s;
     }
 
     // Set the terrain floor elevation (m) used for ground collision in each peer's
@@ -374,6 +400,11 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // enqueueSimCallback.
     void setCongestionParams(const CongestionParams& params) noexcept;
 
+    // Set the graceful tick-overrun governor parameters (#514). Applied to the governor each tick, so
+    // this is hot-reloadable (reload_config). Disabled params pin loadFactor to 1 (no degradation —
+    // exact pre-#514 behaviour). Call before gameLoop.start() or via enqueueSimCallback.
+    void setGovernorParams(const TickGovernorParams& params) noexcept;
+
     // Set the gravity field applied to all FlightIntegrators spawned on this broadcaster (current
     // and future). Also records the planet radius sent to clients in MsgConnectAck so their terrain
     // rendering matches server physics. Defaults to CentralGravityField::earthInstance() /
@@ -402,7 +433,7 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // transform, and register it with the controller under the entity's index. Shared by onConnect
     // (PeerController) and registerController (AI/scripted). Sim-thread only.
     void addControlledEntity(EntityId id, std::unique_ptr<IEntityController> controller,
-                             std::shared_ptr<const FlightModelData> model, float initialThrottle);
+                             std::shared_ptr<const FlightModelData> model, float initialThrottle, bool decimatable);
 
     // Resolve an entity type's EntityDef::flightModelId via the injected resolver. Returns null when
     // the id is empty, no resolver is set, or the id is unknown (logs Warn) — callers fall back to
@@ -529,6 +560,17 @@ class WorldBroadcaster : public ISimUpdate, public INetworkEventHandler {
     // Per-phase tick-budget instrumentation. Written on the sim thread in onTick (begin/end +
     // TickPhaseScope); snapshot()ed (mutex-guarded) by getTickBudget() from any thread.
     TickProfiler m_tickProfiler;
+
+    // Graceful tick-overrun governor (#514). Stepped once per onTick on the sim thread from the prior
+    // tick's measured wall-time; its three lever values are frozen into sim-thread locals for the
+    // parallel regions and mirrored into the atomics below so getOverrunStatus() is a safe cross-thread
+    // read (main thread). m_governorParams is sim-thread-only (configure()d into the governor each tick
+    // so reload_config is automatic, like m_congestionParams).
+    TickGovernor m_tickGovernor;
+    TickGovernorParams m_governorParams{};
+    std::atomic<float> m_overrunLoadFactor{1.f};
+    std::atomic<uint32_t> m_overrunSnapInterval{1};
+    std::atomic<uint32_t> m_overrunAiStride{1};
 
     // Interest management + delta compression state (sim-thread only).
     double m_drawDistanceM{200'000.0}; // precomputed from drawDistanceKm × 1000; 200 km default

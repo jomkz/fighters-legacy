@@ -22,6 +22,8 @@ ServerTickReport sample() {
     r.phases[static_cast<int>(TickPhase::Ai)] = {0.0, 0.3, 1.1, 0.6, 0.9, 0.1};
     r.phases[static_cast<int>(TickPhase::Serialize)] = {0.2, 1.0, 3.0, 2.0, 2.6, 0.4};
     r.other = {0.0, 0.4, 1.0, 0.7, 0.9, 0.1};
+    r.loadFactor = 0.73; // governor actively shedding (#514)
+    r.droppedTicks = 42; // sim overrun drops (#514)
     return r;
 }
 } // namespace
@@ -34,6 +36,7 @@ TEST_CASE("ServerTickReport JSON round-trips", "[servertick]") {
     REQUIRE(fromJson(json, out));
 
     CHECK(out.schemaVersion == in.schemaVersion);
+    CHECK(in.schemaVersion == 2); // v2 (#514) added load_factor + dropped_ticks
     CHECK(out.tickHz == Approx(in.tickHz).margin(1e-3));
     CHECK(out.ticksSampled == in.ticksSampled);
     CHECK(out.ticksTotal == in.ticksTotal);
@@ -47,6 +50,8 @@ TEST_CASE("ServerTickReport JSON round-trips", "[servertick]") {
     CHECK(out.phases[static_cast<int>(TickPhase::Serialize)].mean ==
           Approx(in.phases[static_cast<int>(TickPhase::Serialize)].mean).margin(1e-3));
     CHECK(out.other.mean == Approx(in.other.mean).margin(1e-3));
+    CHECK(out.loadFactor == Approx(in.loadFactor).margin(1e-3));
+    CHECK(out.droppedTicks == in.droppedTicks);
 }
 
 TEST_CASE("ServerTickReport toJson nesting indent is valid", "[servertick]") {
@@ -66,7 +71,7 @@ TEST_CASE("makeServerTickReport maps a TickBudget plus counts", "[servertick]") 
     b.total = {0.5, 1.0, 2.0, 1.5, 1.9, 0.1};
     b.phases[static_cast<int>(TickPhase::Ai)] = {0.0, 0.2, 0.5, 0.4, 0.45, 0.05};
 
-    const ServerTickReport r = makeServerTickReport(b, 42, 7);
+    const ServerTickReport r = makeServerTickReport(b, 42, 7, 0.55, 9);
     CHECK(r.peers == 42);
     CHECK(r.entities == 7u);
     CHECK(r.tickHz == Approx(60.0));
@@ -74,6 +79,13 @@ TEST_CASE("makeServerTickReport maps a TickBudget plus counts", "[servertick]") 
     CHECK(r.ticksTotal == 200);
     CHECK(r.total.p99 == Approx(1.9));
     CHECK(r.phases[static_cast<int>(TickPhase::Ai)].mean == Approx(0.2));
+    CHECK(r.loadFactor == Approx(0.55));
+    CHECK(r.droppedTicks == 9u);
+
+    // Default overrun args = healthy (loadFactor 1, no drops) — back-compat for callers that omit them.
+    const ServerTickReport rDefault = makeServerTickReport(b, 1, 1);
+    CHECK(rDefault.loadFactor == Approx(1.0));
+    CHECK(rDefault.droppedTicks == 0u);
 }
 
 TEST_CASE("fromJson is tolerant of malformed and partial input", "[servertick]") {

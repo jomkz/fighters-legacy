@@ -14,17 +14,23 @@ static_assert(std::atomic<uint64_t>::is_always_lock_free, "uint64_t atomic must 
 
 namespace fl {
 
-// Maximum ticks drained per sim-thread iteration. Caps the "spiral of death":
-// if the sim falls behind (e.g. a CPU spike), we discard excess accumulated time
-// so the game slows down gracefully rather than freezing while trying to catch up.
-static constexpr int kMaxTicksPerIteration = 8;
-
 using Clock = std::chrono::steady_clock;
 using TimePoint = Clock::time_point;
 using ns = std::chrono::nanoseconds;
 
-GameLoop::GameLoop(ISimUpdate& sim, ILogger& logger, double tickRate)
-    : m_sim(sim), m_logger(logger), m_tickRate(tickRate) {}
+int clampCatchupTicks(int rawTicks, int maxCatchup, uint64_t& dropped) noexcept {
+    if (maxCatchup < 1)
+        maxCatchup = 1;
+    if (rawTicks > maxCatchup) {
+        dropped = static_cast<uint64_t>(rawTicks - maxCatchup);
+        return maxCatchup;
+    }
+    dropped = 0;
+    return rawTicks;
+}
+
+GameLoop::GameLoop(ISimUpdate& sim, ILogger& logger, double tickRate, int maxCatchupTicks)
+    : m_sim(sim), m_logger(logger), m_tickRate(tickRate), m_maxCatchupTicks(std::clamp(maxCatchupTicks, 1, 64)) {}
 
 GameLoop::~GameLoop() {
     stop();
@@ -82,6 +88,10 @@ uint64_t GameLoop::totalTicks() const noexcept {
     return m_totalTicksSnap.load(std::memory_order_relaxed);
 }
 
+uint64_t GameLoop::totalDroppedTicks() const noexcept {
+    return m_droppedTicks.load(std::memory_order_relaxed);
+}
+
 void GameLoop::enqueueSimCallback(std::function<void()> fn) {
     std::lock_guard<std::mutex> lk(m_callbackMutex);
     m_pendingCallbacks.push_back(std::move(fn));
@@ -111,7 +121,13 @@ void GameLoop::simThreadFunc() {
             continue;
         }
 
-        ticks = std::min(ticks, kMaxTicksPerIteration);
+        // Spiral-of-death backstop: drain at most m_maxCatchupTicks ticks per iteration; discard the
+        // excess (the accumulator was already fully drained by advance(), so the sim time skips forward
+        // rather than spiralling). Record the drop count for overrun observability (#514).
+        uint64_t droppedThisIter = 0;
+        ticks = clampCatchupTicks(ticks, m_maxCatchupTicks, droppedThisIter);
+        if (droppedThisIter > 0)
+            m_droppedTicks.fetch_add(droppedThisIter, std::memory_order_relaxed);
 
         // Drain one-shot callbacks queued by external threads (e.g. debug console).
         {

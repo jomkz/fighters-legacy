@@ -77,6 +77,13 @@ time_scale         = 10.0        # game seconds per real second; 10 = full day/n
 # congestion_min_send_hz        = 10.0   # floor snapshot rate under congestion; [1, 60]
 # congestion_loss_threshold     = 0.02   # ENet mean loss fraction marking a peer congested; [0, 1]
 # congestion_budget_floor_bytes = 400    # never scale a set snapshot budget below this; [0, 65535]
+# overrun_governor_enabled    = true   # graceful tick-overrun governor: shed work over budget (#514)
+# overrun_high_watermark      = 0.90   # EWMA tick-ms / budget that triggers shedding; [0.1, 1.0]
+# overrun_low_watermark       = 0.60   # recovery threshold (dead-band below high); [0.0, high)
+# overrun_min_snapshot_hz     = 15.0   # floor broadcast rate under overrun; [1, 60]
+# overrun_max_ai_stride       = 4      # deepest AI-sample decimation for non-player entities; [1, 32]
+# overrun_budget_floor_bytes  = 400    # never scale the snapshot budget below this under overrun; [0, 65535]
+# max_catchup_ticks       = 8        # GameLoop catch-up cap (spiral backstop); [1, 64]; needs restart
 # sim_worker_threads      = 0        # sim-tick CPU parallelism; 0 = auto, 1 = serial; [0, 256]
 
 [ai]
@@ -485,6 +492,56 @@ results), so this only affects CPU usage and throughput, never simulation outcom
 The CLI flag `--sim-worker-threads <n>` overrides this value (useful for load-test sweeps).
 Out-of-range values are rejected with a Warn and the default is used. **Requires restart** to take
 effect (the worker pool is built at startup).
+
+### `overrun_governor_enabled` / `overrun_high_watermark` / `overrun_low_watermark` / `overrun_min_snapshot_hz` / `overrun_max_ai_stride` / `overrun_budget_floor_bytes`
+
+| Key | Type | Default | Range |
+|---|---|---|---|
+| `overrun_governor_enabled` | bool | `true` | — |
+| `overrun_high_watermark` | float | `0.90` | `[0.1, 1.0]` |
+| `overrun_low_watermark` | float | `0.60` | `[0.0, high)` |
+| `overrun_min_snapshot_hz` | float | `15.0` | `[1, 60]` |
+| `overrun_max_ai_stride` | integer | `4` | `[1, 32]` |
+| `overrun_budget_floor_bytes` | integer | `400` | `[0, 65535]` |
+
+The graceful tick-overrun governor (#514). When the authoritative tick's measured wall-time exceeds
+its fixed-step budget (~16.667 ms at 60 Hz) under load, the governor **sheds work** to bring the tick
+back under budget rather than spiralling or silently dilating time. It tracks an EWMA of per-tick
+wall-ms and, when it crosses `overrun_high_watermark × budget`, lowers a server-wide `loadFactor` that
+drives three composing levers (on top of the per-client congestion response):
+
+- **snapshot send-rate decimation** — broadcasts are spaced out server-wide, down toward
+  `overrun_min_snapshot_hz`;
+- **per-client byte-budget scaling** — the snapshot budget is scaled down (never below
+  `overrun_budget_floor_bytes`), so the priority/budget scheduler defers more low-relevance entities;
+- **AI-sample decimation** — non-player (AI/scripted) entities have their controller `sample()`
+  skipped on some ticks (reusing their last command), up to `overrun_max_ai_stride`. Players are never
+  decimated, and the **physics integration step always runs every tick** (so flight stays stable).
+
+The governor recovers (raises `loadFactor` back toward 1) once the EWMA drops below
+`overrun_low_watermark × budget`. `overrun_governor_enabled = false`, or any tick comfortably under
+budget, pins `loadFactor = 1` — identical to the pre-#514 behaviour, no wire-format change. The
+current load is shown by `status` (`load: NN%`) and `tickstats`, and exported in `--metrics-json`
+(`load_factor`). Out-of-range values are rejected with a Warn and the default is used.
+**Hot-reloadable** via `reload_config`.
+
+> The governor reduces snapshot/AI *work*. If the **integration** step alone exceeds budget (a fully
+> CPU-bound sim), no lever can help and the `max_catchup_ticks` backstop absorbs it as bounded time
+> dilation — surfaced as a rising `dropped_ticks` / a `Warn` log.
+
+### `max_catchup_ticks`
+
+| Type | Default | Range |
+|---|---|---|
+| integer | `8` | `[1, 64]` |
+
+The `GameLoop` catch-up cap — the maximum number of sim ticks executed in a single loop iteration when
+the sim falls behind. This is the spiral-of-death backstop: beyond the cap, excess accumulated time is
+discarded (the sim time skips forward) rather than the loop trying to catch up forever. The discarded
+count is exported as `dropped_ticks` in `--metrics-json` and logged as a `Warn` when it rises (a
+sustained nonzero rate means the sim cannot keep up even after the governor sheds work). Out-of-range
+values are rejected with a Warn and the default is used. **Requires restart** to take effect (it is a
+`GameLoop` construction value).
 
 ---
 
@@ -942,8 +999,8 @@ process.
 | Command | Args | Description |
 |---|---|---|
 | `help` | `[command]` | List all commands, or show usage for a specific one |
-| `status` | — | Show uptime, peer count, entity count, and the real tick rate (Hz + mean/p99 ms) |
-| `tickstats` | — | Per-phase sim tick budget (integrate/ai/collision/serialize/total; ms mean/p95/p99/max) + actual tick Hz |
+| `status` | — | Show uptime, peer count, entity count, the real tick rate (Hz + mean/p99 ms), and the overrun-governor load (`load: NN%`, `[DEGRADED]` when shedding) |
+| `tickstats` | — | Per-phase sim tick budget (integrate/ai/collision/serialize/total; ms mean/p95/p99/max), actual tick Hz, and the overrun-governor state (`load`, effective snapshot Hz, AI stride) |
 | `peers` | — | List connected peers (peer ID, address, entity index/generation, one-way delay in ticks/ms, input queue buffer fill/max, adaptive snapshot send rate `rate=NN Hz`, ENet packet loss `loss=N.N%`) |
 | `kick` | `<peerId\|IP>` | Disconnect a peer by numeric ID, or all peers from an IP address |
 | `ban` | `<peerId\|IP>` | Add IP to the ban list and kick matching peers; saves to `banlist_path` if configured |
@@ -955,7 +1012,7 @@ process.
 | `spawn` | `<type> <x> <y> <z> [--ai <behavior> [args...]]` | Spawn a registered entity type at the given world position; optionally attach an AI controller. C++ behaviors: `loiter [cx cy cz [radius_m [alt_m [throttle [cw\|ccw]]]]]`, `waypoint x y z [x y z ...] [--loop]`, `pursuit <entityIdx>`, `evade <entityIdx>`, `break <entityIdx> [rollDuration]`, `lead <entityIdx> [navGain]`, `lag <entityIdx> [lagFraction]`, `immelmann [pullDur] [rollDur]`, `split_s [rollDur] [pullDur]`, `high_yo_yo <entityIdx> [climbDur] [reacquireDur]`, `low_yo_yo <entityIdx> [diveDur] [pullDur]`. Lua behavior: `lua <script_name>` (loads `ai/<script_name>.lua` from content packs; see `docs/modding/ai.md`). If the entity type's TOML sets `ai_script`, that script is attached automatically when `--ai` is omitted. |
 | `kill` | `<idx>` | Remove a live entity by pool index (see `peers` output) |
 | `tp` | `<idx> <x> <y> <z>` | Teleport entity `<idx>` to world position; also used by the game client's game console to teleport the player entity |
-| `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `snapshot_budget_bytes`, `jitter_buffer_depth`, `jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, `jitter_buffer_jitter_multiplier`, `congestion_enabled`, `congestion_min_send_hz`, `congestion_loss_threshold`, `congestion_budget_floor_bytes` (all take effect on the next sim tick for all connected peers) |
+| `reload_config` | — | Re-read `server.toml` and apply: `name` (beacon), `motd`, `motd_display_s`, `draw_distance_km`, `snapshot_budget_bytes`, `jitter_buffer_depth`, `jitter_buffer_adapt_window`, `jitter_buffer_hysteresis`, `jitter_buffer_jitter_multiplier`, `congestion_*`, `overrun_governor_enabled`, `overrun_high_watermark`, `overrun_low_watermark`, `overrun_min_snapshot_hz`, `overrun_max_ai_stride`, `overrun_budget_floor_bytes` (all take effect on the next sim tick; `max_catchup_ticks` and `sim_worker_threads` require restart) |
 | `reload_banlist` | — | Re-read `security.banlist_path` from disk and apply immediately |
 | `reload_allowlist` | — | Re-read `security.allowlist_path` from disk and apply immediately |
 | `pause` | — | Pause the simulation — ticks stop advancing; network connections remain active. In single-player the game client sends this automatically when the pause menu is opened. |
@@ -975,9 +1032,14 @@ process.
 | `security.banlist_path` | On next `reload_banlist` command |
 | `security.allowlist_path` | On next `reload_allowlist` command |
 
+Most `[world]` fields are also hot-reloaded on the next sim tick — `draw_distance_km`,
+`snapshot_budget_bytes`, the `jitter_buffer_*` set, the `congestion_*` set, and the `overrun_*` set
+(see the `reload_config` command row above).
+
 Fields that **require a restart** to take effect: `port`, `bind_address`, `max_peers`,
-`game_modes`, `password`, `discovery.*`, `mods.stack`, `rotation.*`, `world.*`, `ai.*`,
-`security.connect_rate_limit_*`, `security.packet_flood_multiplier`, `security.*_bandwidth_bps`,
+`game_modes`, `password`, `discovery.*`, `mods.stack`, `rotation.*`, `world.sim_worker_threads`,
+`world.max_catchup_ticks`, `world.planet_radius_m`, `ai.*`, `security.connect_rate_limit_*`,
+`security.packet_flood_multiplier`, `security.*_bandwidth_bps`,
 `security.pre_handshake_rate_limit_count`, `security.pre_handshake_window_ms`,
 `security.max_connections_per_ip`, `rcon.*`.
 
