@@ -195,12 +195,78 @@ turbulence; `tsan.yml` proves the region is race-free.
 - No in-process thread pinning on any OS — CPU pinning stays external (`taskset` / the reference
   env).
 
+## Graceful overrun handling ([#514])
+
+When the authoritative tick can no longer complete inside its fixed-step budget (~16.667 ms at 60 Hz)
+even at full parallelism, the server must **shed work and degrade gracefully** rather than spiral or
+silently dilate time. This lands as a server-wide overrun **governor** plus an instrumented catch-up
+backstop.
+
+### The `TickGovernor` (`engine/net/TickGovernor.{h,cpp}`)
+
+A pure AIMD policy with no glm / engine-entity deps, unit-tested in isolation exactly like
+`CongestionController` / `SnapshotScheduler`. `WorldBroadcaster` owns one, steps it once per `onTick`
+from the **previous tick's measured wall-time** (`TickProfiler::lastTotalMs()`) against the budget,
+and freezes its lever values for the tick.
+
+- **Control signal = an EWMA of per-tick wall-ms**, NOT the `TickProfiler`'s 60 s p99. p99 over the
+  full window is far too laggy to *recover* from; the EWMA reacts in ~10 ticks and recovers
+  symmetrically (the same reasoning as the congestion RTT baseline). p99 stays an operator-facing
+  *display* metric.
+- **AIMD:** every `evalIntervalTicks` (hysteresis) it classifies the tick — `ewma > budget·high`
+  (0.90) → multiplicative decrease (`×0.7`); `ewma < budget·low` (0.60) → additive increase (`+0.125`);
+  the dead-band between holds. A single `loadFactor ∈ [floor, 1]` results (1 = no degradation).
+- **Three composing levers**, folded in on top of the per-client `CongestionController`:
+  1. **Send-rate** — `snapshotIntervalTicks()`; the gather-time decimation gate uses
+     `max(perPeerCongestionInterval, governorInterval)`, so a peer is decimated by whichever lever
+     spaces it out more. (This is "reduce broadcast Hz", applied server-wide.)
+  2. **Budget** — the static per-client byte budget is pre-scaled by `effectiveBudget()` before the
+     per-peer congestion budget lever; the #516 scheduler then defers more low-relevance entities. No
+     new encode path.
+  3. **AI-sample stride** — `aiSampleStride()`; a *decimatable* (non-player) entity reuses its last
+     sampled `ControlInput` on ticks where `(tickIndex + idx) % stride != 0`. This is the only lever
+     that cuts the **AI phase**. The skip predicate is a pure function of `(idx, tick, stride)` and
+     each worker writes only its own entity's cached input, so it is **serial-equivalent** across
+     worker counts (`test_world_broadcaster` asserts bit-identical transforms for `{1,2,8}` under an
+     over-budget clock) and TSan-clean.
+
+A healthy server, a disabled governor, or any never-overrun tick holds `loadFactor == 1` → all three
+levers are no-ops → **byte-for-byte the pre-#514 behaviour**.
+
+> **Why the integrate pass is never decimated.** Physics uses a fixed `dt`; skipping integration steps
+> destabilises the integrators and desyncs client prediction (which hardcodes 60 Hz). Only AI *sampling*
+> is decimated — the entity still integrates every tick on its last command. If the integrate pass
+> itself is the bottleneck, snapshot/AI shedding cannot help and the catch-up backstop (below) absorbs
+> it as bounded time dilation; a substepping / LOD-physics lever for that case is a follow-on.
+
+> **Why not auto-reduce the sim Hz.** Dynamically changing the physics tick rate would ripple into the
+> client-prediction, jitter-buffer, and congestion math that all hardcode 60 Hz. Rejected; the governor
+> sheds *work*, never the physics rate.
+
+### The catch-up backstop (`GameLoop`)
+
+`GameLoop` still caps catch-up at `max_catchup_ticks` (default 8, `[world]`-configurable) per loop
+iteration — the spiral-of-death backstop. The cap + drop accounting is now a pure free function
+`clampCatchupTicks(rawTicks, maxCatchup, &dropped)` (unit-testable without the sim thread, like
+`resolveWorkerCount`), and the discarded count is exposed via `GameLoop::totalDroppedTicks()`.
+
+### Observability
+
+`WorldBroadcaster::getOverrunStatus()` publishes `loadFactor` / `snapshotIntervalTicks` / `aiStride`
+as relaxed atoms (cross-thread-safe). The `status` and `tickstats` admin commands show them, and
+`--metrics-json` (`ServerTickReport` schema v2) adds `load_factor` + `dropped_ticks`. fl-server logs a
+`Warn` when `totalDroppedTicks()` rises (the sim is falling behind even after shedding).
+
+### Configuration
+
+`[world]` keys (all hot-reloadable via `reload_config` except `max_catchup_ticks`):
+`overrun_governor_enabled` (default `true`), `overrun_high_watermark` (0.90), `overrun_low_watermark`
+(0.60), `overrun_min_snapshot_hz` (15 → floor/interval cap), `overrun_max_ai_stride` (4),
+`overrun_budget_floor_bytes` (400), `max_catchup_ticks` (8). `makeTickGovernorParams(...)` maps the
+operator knobs to the controller internals, shared by startup + `reload_config`.
+
 ## Follow-ons
 
-- **[#514] Graceful overrun handling** — today `GameLoop` caps catch-up at
-  `kMaxTicksPerIteration = 8`. A `TickProfiler`-budget-driven degradation policy (shed/space-out
-  snapshot cadence, reduce broadcast Hz, or drop time-rate when p99 tick-ms exceeds budget) is the
-  planned graceful-degradation path.
 - **Collision phase** — collision detection (not yet implemented) is cross-entity and will need its
   own parallel-safe model rather than the per-entity disjoint-write pattern used here.
 - **Re-evaluate the transport ceiling** after A/B raise the sim ceiling (feeds the transport

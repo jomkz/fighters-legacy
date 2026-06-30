@@ -715,6 +715,7 @@ TEST_CASE("AdminConsole wb: status shows the real tick Hz line", "[admin_console
     CHECK(out.find("tick:") != std::string::npos);
     CHECK(out.find("Hz") != std::string::npos);
     CHECK(out.find("mean/p99") != std::string::npos);
+    CHECK(out.find("load:") != std::string::npos); // overrun governor load % (#514)
 }
 
 // ---------------------------------------------------------------------------
@@ -749,6 +750,7 @@ TEST_CASE("AdminConsole wb: tickstats reports per-phase rows after ticks", "[adm
     CHECK(out.find("collision") != std::string::npos);
     CHECK(out.find("serialize") != std::string::npos);
     CHECK(out.find("total") != std::string::npos);
+    CHECK(out.find("overrun:") != std::string::npos); // governor load/snapshot/ai_stride line (#514)
 }
 
 // ---------------------------------------------------------------------------

@@ -348,3 +348,45 @@ TEST_CASE("GameLoop: fires approximately 60 ticks per second at Normal rate", "[
     REQUIRE(count >= 51);
     REQUIRE(count <= 69);
 }
+
+// ---------------------------------------------------------------------------
+// clampCatchupTicks — the pure spiral-of-death backstop + drop accounting (#514).
+// Unit-tested directly (no sim thread) since it is a pure free function.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("clampCatchupTicks: under the cap passes through with zero drops", "[gl][overrun]") {
+    uint64_t dropped = 999;
+    CHECK(clampCatchupTicks(5, 8, dropped) == 5);
+    CHECK(dropped == 0u);
+}
+
+TEST_CASE("clampCatchupTicks: at the cap passes through with zero drops", "[gl][overrun]") {
+    uint64_t dropped = 999;
+    CHECK(clampCatchupTicks(8, 8, dropped) == 8);
+    CHECK(dropped == 0u);
+}
+
+TEST_CASE("clampCatchupTicks: over the cap caps and reports the discarded count", "[gl][overrun]") {
+    uint64_t dropped = 0;
+    CHECK(clampCatchupTicks(20, 8, dropped) == 8);
+    CHECK(dropped == 12u);
+}
+
+TEST_CASE("clampCatchupTicks: a configured cap is honoured", "[gl][overrun]") {
+    uint64_t dropped = 0;
+    CHECK(clampCatchupTicks(10, 4, dropped) == 4);
+    CHECK(dropped == 6u);
+}
+
+TEST_CASE("clampCatchupTicks: maxCatchup is floored at 1", "[gl][overrun]") {
+    uint64_t dropped = 0;
+    CHECK(clampCatchupTicks(5, 0, dropped) == 1);
+    CHECK(dropped == 4u);
+}
+
+TEST_CASE("GameLoop: totalDroppedTicks starts at zero", "[gl][overrun]") {
+    MockSim sim;
+    MockLogger logger;
+    GameLoop gl(sim, logger, 60.0, 8);
+    CHECK(gl.totalDroppedTicks() == 0u);
+}

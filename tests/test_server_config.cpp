@@ -56,6 +56,13 @@ TEST_CASE("parseServerConfig: empty TOML returns all defaults", "[server_config]
     CHECK(cfg.jitterHysteresis == 2u);
     CHECK(cfg.jitterMultiplier == Catch::Approx(2.0f));
     CHECK(cfg.simWorkerThreads == 0u);
+    CHECK(cfg.overrunGovernorEnabled == true);
+    CHECK(cfg.overrunHighWatermark == Catch::Approx(0.90f));
+    CHECK(cfg.overrunLowWatermark == Catch::Approx(0.60f));
+    CHECK(cfg.overrunMinSnapshotHz == Catch::Approx(15.0f));
+    CHECK(cfg.overrunMaxAiStride == 4u);
+    CHECK(cfg.overrunBudgetFloorBytes == 400u);
+    CHECK(cfg.maxCatchupTicks == 8);
     CHECK(log.entries.empty());
 }
 
@@ -76,6 +83,58 @@ TEST_CASE("parseServerConfig: world.sim_worker_threads out of range warns and ke
     auto cfg = parseServerConfig("[world]\nsim_worker_threads = 257\n", &log);
     CHECK(cfg.simWorkerThreads == 0u);
     CHECK_FALSE(log.entries.empty());
+}
+
+// ---------------------------------------------------------------------------
+// Graceful tick-overrun governor keys (#514)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("parseServerConfig: reads overrun governor keys", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig(R"(
+[world]
+overrun_governor_enabled = false
+overrun_high_watermark = 0.8
+overrun_low_watermark = 0.5
+overrun_min_snapshot_hz = 20.0
+overrun_max_ai_stride = 8
+overrun_budget_floor_bytes = 600
+max_catchup_ticks = 16
+)",
+                                 &log);
+    CHECK_FALSE(cfg.overrunGovernorEnabled);
+    CHECK(cfg.overrunHighWatermark == Catch::Approx(0.8f));
+    CHECK(cfg.overrunLowWatermark == Catch::Approx(0.5f));
+    CHECK(cfg.overrunMinSnapshotHz == Catch::Approx(20.0f));
+    CHECK(cfg.overrunMaxAiStride == 8u);
+    CHECK(cfg.overrunBudgetFloorBytes == 600u);
+    CHECK(cfg.maxCatchupTicks == 16);
+    CHECK(log.entries.empty());
+}
+
+TEST_CASE("parseServerConfig: overrun_low_watermark must be below high warns and keeps default", "[server_config]") {
+    MockLogger log;
+    // low >= high (default high 0.90) is rejected.
+    auto cfg = parseServerConfig("[world]\noverrun_low_watermark = 0.95\n", &log);
+    CHECK(cfg.overrunLowWatermark == Catch::Approx(0.60f));
+    CHECK(log.hasMessage(LogLevel::Warn, "world.overrun_low_watermark out of range"));
+}
+
+TEST_CASE("parseServerConfig: overrun_max_ai_stride out of range warns and keeps default", "[server_config]") {
+    MockLogger log;
+    auto cfg = parseServerConfig("[world]\noverrun_max_ai_stride = 99\n", &log);
+    CHECK(cfg.overrunMaxAiStride == 4u);
+    CHECK(log.hasMessage(LogLevel::Warn, "world.overrun_max_ai_stride out of range"));
+}
+
+TEST_CASE("parseServerConfig: max_catchup_ticks boundary + out-of-range", "[server_config]") {
+    MockLogger log;
+    CHECK(parseServerConfig("[world]\nmax_catchup_ticks = 1\n", &log).maxCatchupTicks == 1);
+    CHECK(parseServerConfig("[world]\nmax_catchup_ticks = 64\n", &log).maxCatchupTicks == 64);
+    MockLogger log2;
+    auto cfg = parseServerConfig("[world]\nmax_catchup_ticks = 65\n", &log2);
+    CHECK(cfg.maxCatchupTicks == 8);
+    CHECK(log2.hasMessage(LogLevel::Warn, "world.max_catchup_ticks out of range"));
 }
 
 // ---------------------------------------------------------------------------

@@ -348,6 +348,14 @@ std::vector<FinalState> runParallelScenario(fl::JobSystem* jobs) {
     fl::WorldBroadcaster broadcaster(em, registry, net, logger, &weather);
     if (jobs)
         broadcaster.setJobSystem(*jobs);
+    // Disable the overrun governor (#514): it reads wall-clock tick time, so leaving it enabled would
+    // let a slow CI tick perturb AI sampling differently across the worker-count runs and break the
+    // bit-identity claim. The AI-decimation lever's own serial-equivalence is proven separately below.
+    {
+        fl::TickGovernorParams gp;
+        gp.enabled = false;
+        broadcaster.setGovernorParams(gp);
+    }
     broadcaster.onConnect(0u);
 
     std::vector<fl::EntityId> ids;
@@ -512,6 +520,148 @@ TEST_CASE("WorldBroadcaster: a congested peer is decimated while a healthy peer 
     const std::size_t congestedSnaps = snapshotsFor(net, 1u).size();
     CHECK(congestedSnaps < healthySnaps); // decimation skipped the congested peer on some ticks
     CHECK(congestedSnaps > 0u);           // but it still receives snapshots at the floor rate
+}
+
+// -----------------------------------------------------------------------------------------------
+// Graceful tick-overrun governor (#514).
+// -----------------------------------------------------------------------------------------------
+
+namespace {
+// A fake clock that advances a fixed delta on every now() call. Because onTick reads the clock a
+// fixed number of times per tick (per-pass phase timing, worker-count-independent), each tick measures
+// a constant, over-budget wall span — so the governor degrades deterministically and identically
+// across worker counts. Sim-thread only (no synchronization); mutable m_now so the const now() can step.
+class AutoAdvanceClock final : public fl::IClock {
+  public:
+    explicit AutoAdvanceClock(std::chrono::steady_clock::duration step) : m_step(step) {}
+    std::chrono::steady_clock::time_point now() const override {
+        m_now += m_step;
+        return m_now;
+    }
+
+  private:
+    mutable std::chrono::steady_clock::time_point m_now{};
+    std::chrono::steady_clock::duration m_step;
+};
+
+struct DecimationResult {
+    std::vector<FinalState> states;
+    uint32_t finalAiStride{1};
+    float finalLoadFactor{1.f};
+};
+
+// Run a fixed AI-entity scenario under the auto-advancing (over-budget) clock so the governor sheds.
+// When `jobs` is non-null the per-entity passes run data-parallel. Used to prove the AI-sample
+// decimation lever is serial-equivalent across worker counts.
+DecimationResult runDecimationScenario(fl::JobSystem* jobs) {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    AutoAdvanceClock clock(std::chrono::milliseconds(3)); // ~constant over-budget tick span
+
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setClock(clock);
+    if (jobs)
+        broadcaster.setJobSystem(*jobs);
+    // Aggressive, fast-reacting governor: evaluate every tick so it reaches the floor quickly.
+    fl::TickGovernorParams gp = fl::makeTickGovernorParams(true, 0.90f, 0.60f, 15.0f, 4u, 400u);
+    gp.evalIntervalTicks = 1u;
+    gp.ewmaAlpha = 1.0f;
+    broadcaster.setGovernorParams(gp);
+    broadcaster.onConnect(0u);
+
+    std::vector<fl::EntityId> ids;
+    for (int i = 0; i < 16; ++i) {
+        fl::EntityTransform t{};
+        t.pos[0] = i * 100.0;
+        t.pos[1] = 1000.0;
+        t.pos[2] = i * 50.0;
+        fl::EntityId id = em.spawn("builtin:debug-entity", t);
+        REQUIRE(id.valid());
+        auto controller = std::make_unique<ConstantController>();
+        controller->throttle = 1.0f;
+        broadcaster.registerController(id, std::move(controller)); // decimatable (AI)
+        ids.push_back(id);
+    }
+
+    for (uint64_t tick = 1; tick <= 120; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    DecimationResult res;
+    const fl::OverrunStatus ov = broadcaster.getOverrunStatus();
+    res.finalAiStride = ov.aiStride;
+    res.finalLoadFactor = ov.loadFactor;
+    for (fl::EntityId id : ids) {
+        const fl::EntityState* st = em.get(id);
+        REQUIRE(st != nullptr);
+        FinalState fsv{};
+        fsv.idx = id.index;
+        for (int k = 0; k < 3; ++k)
+            fsv.pos[k] = st->transform.pos[k];
+        for (int k = 0; k < 4; ++k)
+            fsv.quat[k] = st->transform.quat[k];
+        res.states.push_back(fsv);
+    }
+    std::sort(res.states.begin(), res.states.end(),
+              [](const FinalState& a, const FinalState& b) { return a.idx < b.idx; });
+    return res;
+}
+} // namespace
+
+TEST_CASE("WorldBroadcaster: overrun governor degrades under an over-budget clock", "[world_broadcaster][overrun]") {
+    MockLogger logger;
+    MockNetwork net;
+    fl::EntityTypeRegistry registry;
+    fl::EntityManager em(logger, registry);
+    registry.registerType(makeDebugDef());
+
+    AutoAdvanceClock clock(std::chrono::milliseconds(3));
+    fl::WorldBroadcaster broadcaster(em, registry, net, logger);
+    broadcaster.setClock(clock);
+    fl::TickGovernorParams gp = fl::makeTickGovernorParams(true, 0.90f, 0.60f, 15.0f, 4u, 400u);
+    gp.evalIntervalTicks = 1u;
+    gp.ewmaAlpha = 1.0f;
+    broadcaster.setGovernorParams(gp);
+    broadcaster.onConnect(0u);
+
+    for (uint64_t tick = 1; tick <= 120; ++tick)
+        broadcaster.onTick(1.0 / 60.0, tick);
+
+    const fl::OverrunStatus ov = broadcaster.getOverrunStatus();
+    CHECK(ov.degraded);
+    CHECK(ov.loadFactor < 1.0f);
+    CHECK(ov.snapshotIntervalTicks > 1u); // server-wide send-rate decimation engaged
+    CHECK(ov.aiStride > 1u);              // AI-sample decimation engaged
+
+    // The send-rate lever decimated the peer's snapshots below one-per-tick.
+    CHECK(snapshotsFor(net, 0u).size() < 120u);
+}
+
+TEST_CASE("WorldBroadcaster: AI-sample decimation is serial-equivalent across worker counts",
+          "[world_broadcaster][overrun]") {
+    const DecimationResult baseline = runDecimationScenario(nullptr); // inline reference
+    // The governor must actually have engaged AI decimation, else the test is vacuous.
+    REQUIRE(baseline.finalAiStride > 1u);
+    REQUIRE(baseline.finalLoadFactor < 1.0f);
+
+    for (unsigned total : {1u, 2u, 8u}) {
+        fl::JobSystem jobs(total);
+        const DecimationResult got = runDecimationScenario(&jobs);
+        CHECK(got.finalAiStride == baseline.finalAiStride);
+        REQUIRE(got.states.size() == baseline.states.size());
+        for (size_t i = 0; i < baseline.states.size(); ++i) {
+            CHECK(got.states[i].idx == baseline.states[i].idx);
+            // Bit-identical: the skip predicate (tickIndex+idx)%stride and per-entity lastInput reuse
+            // are pure functions of (idx, tick, stride) with only disjoint per-entity writes.
+            for (int k = 0; k < 3; ++k)
+                CHECK(got.states[i].pos[k] == baseline.states[i].pos[k]);
+            for (int k = 0; k < 4; ++k)
+                CHECK(got.states[i].quat[k] == baseline.states[i].quat[k]);
+        }
+    }
 }
 
 TEST_CASE("WorldBroadcaster: getTickBudget records per-phase timing after onTick", "[world_broadcaster]") {

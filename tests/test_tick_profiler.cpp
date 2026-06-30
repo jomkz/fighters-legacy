@@ -116,3 +116,22 @@ TEST_CASE("TickPhaseScope records wall-time into the current tick", "[tickprofil
     CHECK(b.total.mean == Approx(10.0));
     CHECK(b.other.mean == Approx(3.0));
 }
+
+TEST_CASE("TickProfiler lastTotalMs reflects the most recent tick", "[tickprofiler]") {
+    ManualClock clk;
+    TickProfiler prof(100);
+    prof.setClock(clk);
+
+    // Zero before the first tick.
+    CHECK(prof.lastTotalMs() == 0.0);
+
+    prof.beginTick();
+    clk.advance(milliseconds(20));
+    prof.endTick();
+    CHECK(prof.lastTotalMs() == Approx(20.0));
+
+    prof.beginTick();
+    clk.advance(milliseconds(5));
+    prof.endTick();
+    CHECK(prof.lastTotalMs() == Approx(5.0)); // overwritten by the latest tick, not accumulated
+}

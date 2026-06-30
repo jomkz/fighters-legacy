@@ -375,6 +375,10 @@ add_executable(test_congestion_controller test_congestion_controller.cpp)
 target_link_libraries(test_congestion_controller PRIVATE Catch2::Catch2WithMain engine-net)
 catch_discover_tests(test_congestion_controller)
 
+add_executable(test_tick_governor test_tick_governor.cpp)
+target_link_libraries(test_tick_governor PRIVATE Catch2::Catch2WithMain engine-net)
+catch_discover_tests(test_tick_governor)
+
 add_executable(test_performance_overlay test_performance_overlay.cpp)
 target_link_libraries(test_performance_overlay PRIVATE Catch2::Catch2WithMain engine-perf)
 catch_discover_tests(test_performance_overlay)

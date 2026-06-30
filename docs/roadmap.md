@@ -84,10 +84,11 @@ this in addition to its existing criteria.
    Transport replacement (Epic L) is decoupled to a later optimisation (encryption/congestion/
    connection-count headroom), to be re-evaluated once A/B raise the sim ceiling.
    **Epic A progress:** the design spike ([#510](https://github.com/fighters-legacy/fighters-legacy/issues/510))
-   chose a data-parallel single tick (not spatial sharding) and the `engine-job` worker pool +
-   parallel AI/integrate passes landed ([#511](https://github.com/fighters-legacy/fighters-legacy/issues/511));
-   snapshot-assembly parallelism (#512) and graceful overrun handling (#514) remain. See
-   [server-job-system-design.md](server-job-system-design.md).
+   chose a data-parallel single tick (not spatial sharding); the `engine-job` worker pool +
+   parallel AI/integrate passes ([#511](https://github.com/fighters-legacy/fighters-legacy/issues/511)),
+   per-peer snapshot-assembly parallelism (#512), tick-budget instrumentation (#513), and graceful
+   tick-overrun handling (#514) have all landed. Spatial sharding remains the deferred next scaling
+   axis. See [server-job-system-design.md](server-job-system-design.md).
 
 2. **LuaSandbox wired (#359 ✓) → fl-base-pack AI scripts → AI System (#33)**
    fl-base-pack Lua behaviour scripts can now target the `compute_control` API shipped in #359.

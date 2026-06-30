@@ -70,6 +70,13 @@ static const char* kDefaultToml =
     "# congestion_min_send_hz = 10.0    # floor snapshot rate under congestion; [1, 60]\n"
     "# congestion_loss_threshold = 0.02 # ENet mean loss fraction that marks a peer congested; [0, 1]\n"
     "# congestion_budget_floor_bytes = 400  # never scale a set snapshot budget below this; [0, 65535]\n"
+    "# overrun_governor_enabled = true  # graceful tick-overrun governor: shed work over budget (#514)\n"
+    "# overrun_high_watermark = 0.90    # EWMA tick-ms / budget that triggers shedding; [0.1, 1.0]\n"
+    "# overrun_low_watermark = 0.60     # recovery threshold (dead-band below high); [0.0, high)\n"
+    "# overrun_min_snapshot_hz = 15.0   # floor broadcast rate under overrun; [1, 60]\n"
+    "# overrun_max_ai_stride = 4        # deepest AI-sample decimation for non-player entities; [1, 32]\n"
+    "# overrun_budget_floor_bytes = 400 # never scale the snapshot budget below this under overrun; [0, 65535]\n"
+    "# max_catchup_ticks = 8            # GameLoop catch-up cap (spiral backstop); [1, 64]; needs restart\n"
     "# sim_worker_threads = 0           # sim-tick CPU parallelism; 0 = auto, 1 = serial; [0, 256]\n"
     "\n"
     "[ai]\n"
@@ -365,6 +372,58 @@ ServerConfig parseServerConfig(std::string_view content, ILogger* log) {
                          "world.sim_worker_threads out of range [0, 256]; using default 0 (auto)");
             } else {
                 cfg.simWorkerThreads = static_cast<uint32_t>(*v);
+            }
+        }
+        // Graceful tick-overrun governor (#514).
+        if (auto v = tbl["world"]["overrun_governor_enabled"].value<bool>()) {
+            cfg.overrunGovernorEnabled = *v;
+        }
+        if (auto v = tbl["world"]["overrun_high_watermark"].value<double>()) {
+            if (*v < 0.1 || *v > 1.0) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.overrun_high_watermark out of range [0.1, 1.0]; using default 0.90");
+            } else {
+                cfg.overrunHighWatermark = static_cast<float>(*v);
+            }
+        }
+        if (auto v = tbl["world"]["overrun_low_watermark"].value<double>()) {
+            if (*v < 0.0 || *v >= cfg.overrunHighWatermark) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.overrun_low_watermark out of range [0.0, high_watermark); using default 0.60");
+            } else {
+                cfg.overrunLowWatermark = static_cast<float>(*v);
+            }
+        }
+        if (auto v = tbl["world"]["overrun_min_snapshot_hz"].value<double>()) {
+            if (*v < 1.0 || *v > 60.0) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.overrun_min_snapshot_hz out of range [1, 60]; using default 15.0");
+            } else {
+                cfg.overrunMinSnapshotHz = static_cast<float>(*v);
+            }
+        }
+        if (auto v = tbl["world"]["overrun_max_ai_stride"].value<int64_t>()) {
+            if (*v < int64_t{1} || *v > int64_t{32}) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.overrun_max_ai_stride out of range [1, 32]; using default 4");
+            } else {
+                cfg.overrunMaxAiStride = static_cast<uint32_t>(*v);
+            }
+        }
+        if (auto v = tbl["world"]["overrun_budget_floor_bytes"].value<int64_t>()) {
+            if (*v < int64_t{0} || *v > int64_t{65535}) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.overrun_budget_floor_bytes out of range [0, 65535]; using default 400");
+            } else {
+                cfg.overrunBudgetFloorBytes = static_cast<uint32_t>(*v);
+            }
+        }
+        if (auto v = tbl["world"]["max_catchup_ticks"].value<int64_t>()) {
+            if (*v < int64_t{1} || *v > int64_t{64}) {
+                log->log(LogLevel::Warn, __FILE__, __LINE__,
+                         "world.max_catchup_ticks out of range [1, 64]; using default 8");
+            } else {
+                cfg.maxCatchupTicks = static_cast<int>(*v);
             }
         }
 

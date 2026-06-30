@@ -183,6 +183,11 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                           "uptime: %llds  peers: %d  entities: %u  tick: %.1f Hz (%.2f/%.2f ms mean/p99)",
                           static_cast<long long>(uptimeSec), peers, entities, tb.tickHz, tb.total.mean, tb.total.p99);
             std::string out(buf);
+            const fl::OverrunStatus ov = ctx.sim.broadcaster->getOverrunStatus();
+            char ovbuf[64];
+            std::snprintf(ovbuf, sizeof(ovbuf), "  load: %.0f%%%s", ov.loadFactor * 100.0,
+                          ov.degraded ? " [DEGRADED]" : "");
+            out += ovbuf;
             auto ls = ctx.sim.broadcaster->getAuthLockoutSummary();
             if (ls.activeCount > 0) {
                 char lbuf[96];
@@ -208,6 +213,12 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
                           tb.windowSeconds, static_cast<unsigned long long>(tb.ticksSampled),
                           static_cast<unsigned long long>(tb.ticksTotal));
             out += hdr;
+            const fl::OverrunStatus ov = ctx.sim.broadcaster->getOverrunStatus();
+            char ovrow[128];
+            std::snprintf(ovrow, sizeof(ovrow), "\n  overrun: load %.2f  snapshot %.1f Hz  ai_stride %u%s",
+                          ov.loadFactor, 60.0 / static_cast<double>(ov.snapshotIntervalTicks), ov.aiStride,
+                          ov.degraded ? "  [DEGRADED]" : "");
+            out += ovrow;
             auto appendRow = [&out](const char* label, const fl::Stats& s) {
                 char row[160];
                 std::snprintf(row, sizeof(row), "\n  %-12s mean %.3f  p95 %.3f  p99 %.3f  max %.3f ms", label, s.mean,
@@ -719,59 +730,66 @@ void registerServerCommands(CommandRegistry& registry, ServerCommandContext ctx)
         });
 
     // reload_config
-    registry.registerCommand("reload_config",
-                             "reload_config  -- re-read server.toml and apply: name (beacon), motd, motd_display_s,"
-                             " draw_distance_km, snapshot_budget_bytes, jitter_buffer_depth,"
-                             " jitter_buffer_adapt_window, jitter_buffer_hysteresis, jitter_buffer_jitter_multiplier,"
-                             " congestion_enabled, congestion_min_send_hz, congestion_loss_threshold,"
-                             " congestion_budget_floor_bytes (other fields require restart)",
-                             [ctx](std::span<std::string_view>) -> std::string {
-                                 if (!ctx.env.configPath || ctx.env.configPath->empty())
-                                     return "reload_config: not available";
-                                 std::ifstream f(*ctx.env.configPath);
-                                 if (!f)
-                                     return "reload_config: cannot open " + *ctx.env.configPath;
-                                 std::ostringstream ss;
-                                 ss << f.rdbuf();
-                                 ServerConfig newCfg = parseServerConfig(ss.str(), ctx.env.logger);
-                                 if (ctx.env.beacon)
-                                     ctx.env.beacon->setName(newCfg.name);
-                                 if (ctx.sim.broadcaster && ctx.sim.gameLoop) {
-                                     auto newMotd = newCfg.motd;
-                                     auto newMotdDisplayS = newCfg.motdDisplayS;
-                                     auto newDraw = static_cast<float>(newCfg.drawDistanceKm);
-                                     auto newSnapshotBudget = newCfg.snapshotBudgetBytes;
-                                     auto newJitterDepth = newCfg.jitterBufferDepth;
-                                     auto newAdaptWindow = newCfg.jitterAdaptWindow;
-                                     auto newHysteresis = newCfg.jitterHysteresis;
-                                     auto newMultiplier = newCfg.jitterMultiplier;
-                                     auto newCongestion = fl::makeCongestionParams(
-                                         newCfg.congestionEnabled, newCfg.congestionMinSendHz,
-                                         newCfg.congestionLossThreshold, newCfg.congestionBudgetFloorBytes);
-                                     ctx.sim.gameLoop->enqueueSimCallback(
-                                         [ctx, newMotd, newMotdDisplayS, newDraw, newSnapshotBudget, newJitterDepth,
-                                          newAdaptWindow, newHysteresis, newMultiplier, newCongestion]() mutable {
-                                             ctx.sim.broadcaster->setMotd(std::move(newMotd));
-                                             ctx.sim.broadcaster->setMotdDisplaySeconds(newMotdDisplayS);
-                                             ctx.sim.broadcaster->setDrawDistance(newDraw);
-                                             ctx.sim.broadcaster->setSnapshotBudget(newSnapshotBudget);
-                                             ctx.sim.broadcaster->setJitterBufferDepth(newJitterDepth);
-                                             ctx.sim.broadcaster->setJitterAdaptWindow(newAdaptWindow);
-                                             ctx.sim.broadcaster->setJitterHysteresis(newHysteresis);
-                                             ctx.sim.broadcaster->setJitterMultiplier(newMultiplier);
-                                             ctx.sim.broadcaster->setCongestionParams(newCongestion);
-                                         });
-                                 }
-                                 return "reload_config: name=\"" + newCfg.name + "\"  motd=\"" + newCfg.motd +
-                                        "\"  motd_display_s=" + std::to_string(newCfg.motdDisplayS) +
-                                        "  draw_distance_km=" + std::to_string(newCfg.drawDistanceKm) +
-                                        "  snapshot_budget_bytes=" + std::to_string(newCfg.snapshotBudgetBytes) +
-                                        "  jitter_buffer_depth=" + std::to_string(newCfg.jitterBufferDepth) +
-                                        "  jitter_buffer_adapt_window=" + std::to_string(newCfg.jitterAdaptWindow) +
-                                        "  jitter_buffer_hysteresis=" + std::to_string(newCfg.jitterHysteresis) +
-                                        "  jitter_buffer_jitter_multiplier=" + std::to_string(newCfg.jitterMultiplier) +
-                                        "  (other fields require restart)";
-                             });
+    registry.registerCommand(
+        "reload_config",
+        "reload_config  -- re-read server.toml and apply: name (beacon), motd, motd_display_s,"
+        " draw_distance_km, snapshot_budget_bytes, jitter_buffer_depth,"
+        " jitter_buffer_adapt_window, jitter_buffer_hysteresis, jitter_buffer_jitter_multiplier,"
+        " congestion_enabled, congestion_min_send_hz, congestion_loss_threshold,"
+        " congestion_budget_floor_bytes, overrun_governor_enabled, overrun_high_watermark,"
+        " overrun_low_watermark, overrun_min_snapshot_hz, overrun_max_ai_stride,"
+        " overrun_budget_floor_bytes (other fields, incl. max_catchup_ticks, require restart)",
+        [ctx](std::span<std::string_view>) -> std::string {
+            if (!ctx.env.configPath || ctx.env.configPath->empty())
+                return "reload_config: not available";
+            std::ifstream f(*ctx.env.configPath);
+            if (!f)
+                return "reload_config: cannot open " + *ctx.env.configPath;
+            std::ostringstream ss;
+            ss << f.rdbuf();
+            ServerConfig newCfg = parseServerConfig(ss.str(), ctx.env.logger);
+            if (ctx.env.beacon)
+                ctx.env.beacon->setName(newCfg.name);
+            if (ctx.sim.broadcaster && ctx.sim.gameLoop) {
+                auto newMotd = newCfg.motd;
+                auto newMotdDisplayS = newCfg.motdDisplayS;
+                auto newDraw = static_cast<float>(newCfg.drawDistanceKm);
+                auto newSnapshotBudget = newCfg.snapshotBudgetBytes;
+                auto newJitterDepth = newCfg.jitterBufferDepth;
+                auto newAdaptWindow = newCfg.jitterAdaptWindow;
+                auto newHysteresis = newCfg.jitterHysteresis;
+                auto newMultiplier = newCfg.jitterMultiplier;
+                auto newCongestion =
+                    fl::makeCongestionParams(newCfg.congestionEnabled, newCfg.congestionMinSendHz,
+                                             newCfg.congestionLossThreshold, newCfg.congestionBudgetFloorBytes);
+                auto newGovernor = fl::makeTickGovernorParams(
+                    newCfg.overrunGovernorEnabled, newCfg.overrunHighWatermark, newCfg.overrunLowWatermark,
+                    newCfg.overrunMinSnapshotHz, newCfg.overrunMaxAiStride, newCfg.overrunBudgetFloorBytes);
+                ctx.sim.gameLoop->enqueueSimCallback([ctx, newMotd, newMotdDisplayS, newDraw, newSnapshotBudget,
+                                                      newJitterDepth, newAdaptWindow, newHysteresis, newMultiplier,
+                                                      newCongestion, newGovernor]() mutable {
+                    ctx.sim.broadcaster->setMotd(std::move(newMotd));
+                    ctx.sim.broadcaster->setMotdDisplaySeconds(newMotdDisplayS);
+                    ctx.sim.broadcaster->setDrawDistance(newDraw);
+                    ctx.sim.broadcaster->setSnapshotBudget(newSnapshotBudget);
+                    ctx.sim.broadcaster->setJitterBufferDepth(newJitterDepth);
+                    ctx.sim.broadcaster->setJitterAdaptWindow(newAdaptWindow);
+                    ctx.sim.broadcaster->setJitterHysteresis(newHysteresis);
+                    ctx.sim.broadcaster->setJitterMultiplier(newMultiplier);
+                    ctx.sim.broadcaster->setCongestionParams(newCongestion);
+                    ctx.sim.broadcaster->setGovernorParams(newGovernor);
+                });
+            }
+            return "reload_config: name=\"" + newCfg.name + "\"  motd=\"" + newCfg.motd +
+                   "\"  motd_display_s=" + std::to_string(newCfg.motdDisplayS) +
+                   "  draw_distance_km=" + std::to_string(newCfg.drawDistanceKm) +
+                   "  snapshot_budget_bytes=" + std::to_string(newCfg.snapshotBudgetBytes) +
+                   "  jitter_buffer_depth=" + std::to_string(newCfg.jitterBufferDepth) +
+                   "  jitter_buffer_adapt_window=" + std::to_string(newCfg.jitterAdaptWindow) +
+                   "  jitter_buffer_hysteresis=" + std::to_string(newCfg.jitterHysteresis) +
+                   "  jitter_buffer_jitter_multiplier=" + std::to_string(newCfg.jitterMultiplier) +
+                   "  (other fields require restart)";
+        });
 
     // reload_banlist
     registry.registerCommand("reload_banlist",

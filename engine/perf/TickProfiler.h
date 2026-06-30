@@ -88,6 +88,7 @@ class TickProfiler {
     void endTick() {
         const auto now = m_clock->now();
         const double totalMs = std::chrono::duration<double, std::milli>(now - m_tickStart).count();
+        m_lastTotalMs = totalMs;
 
         std::lock_guard<std::mutex> lk(m_mutex);
         for (int i = 0; i < kTickPhaseCount; ++i)
@@ -104,6 +105,12 @@ class TickProfiler {
         if (m_count < m_window)
             ++m_count;
         ++m_ticksTotal;
+    }
+
+    // Most recent tick's total wall-time (ms); 0.0 before the first endTick(). Sim-thread only —
+    // consumed by the overrun governor (#514) to drive its degradation policy off the prior tick's cost.
+    double lastTotalMs() const noexcept {
+        return m_lastTotalMs;
     }
 
     // --- reader-thread API (any thread) ---
@@ -151,6 +158,7 @@ class TickProfiler {
     // Sim-thread scratch for the in-progress tick (no lock).
     std::array<double, kTickPhaseCount> m_cur{};
     std::chrono::steady_clock::time_point m_tickStart{};
+    double m_lastTotalMs{0.0}; // most recent endTick() total; read by the overrun governor
 
     // Rolling rings, guarded by m_mutex.
     mutable std::mutex m_mutex;

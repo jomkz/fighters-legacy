@@ -16,6 +16,11 @@ namespace fl {
 class ILogger;
 class ISimUpdate;
 
+// Caps the per-iteration catch-up tick count (the spiral-of-death backstop) and reports how many ticks
+// were shed. Pure so it is unit-testable without spinning the sim thread. Returns min(rawTicks,
+// maxCatchup) (maxCatchup floored at 1) and sets `dropped` to the number of ticks discarded (>= 0).
+[[nodiscard]] int clampCatchupTicks(int rawTicks, int maxCatchup, uint64_t& dropped) noexcept;
+
 // Manages the fixed-timestep sim thread and coordinates with the main (render) thread.
 //
 // Threading model:
@@ -32,7 +37,11 @@ class ISimUpdate;
 class GameLoop {
   public:
     // tickRate: desired sim ticks per real second at Normal compression (default 60).
-    GameLoop(ISimUpdate& sim, ILogger& logger, double tickRate = 60.0);
+    // maxCatchupTicks: max sim ticks drained per loop iteration — the spiral-of-death backstop. When a
+    // single iteration falls more than this many ticks behind (e.g. a CPU spike under 128-player load),
+    // the excess is discarded (sim time dilates) rather than spiralling; the count is exposed via
+    // totalDroppedTicks(). Range [1, 64]; default 8.
+    GameLoop(ISimUpdate& sim, ILogger& logger, double tickRate = 60.0, int maxCatchupTicks = 8);
 
     // Destructor calls stop() as a safety net; prefer an explicit stop() before
     // any HAL teardown so the sim thread exits while the logger is still alive.
@@ -77,16 +86,23 @@ class GameLoop {
     // Approximate snapshot of total ticks fired (atomic load, relaxed).
     [[nodiscard]] uint64_t totalTicks() const noexcept;
 
+    // All-time count of sim ticks discarded by the catch-up cap (sim overrun / time dilation). 0 on a
+    // healthy server; a rising value means the sim cannot keep up even after the governor sheds work.
+    // Atomic load (relaxed); safe from any thread. Surfaced by fl-server's metrics loop + --metrics-json.
+    [[nodiscard]] uint64_t totalDroppedTicks() const noexcept;
+
   private:
     void simThreadFunc();
 
     ISimUpdate& m_sim;
     ILogger& m_logger;
     double m_tickRate;
+    int m_maxCatchupTicks;
 
     std::atomic<bool> m_running{false};
     std::atomic<int64_t> m_lastTickNs{0};
     std::atomic<uint64_t> m_totalTicksSnap{0};
+    std::atomic<uint64_t> m_droppedTicks{0};
 
     mutable std::mutex m_rateMutex;
     TimeRate m_pendingRate{TimeRate::Normal};
