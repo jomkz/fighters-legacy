@@ -132,7 +132,9 @@ jobs:
           ./build/debug/tools/validate-licenses --version
           ./build/debug/tools/validate-playlist --version
           ./build/debug/tools/terrain-chunk-io --version
-          ./build/debug/server/fl-server/fl-server 7002 1 &
+          # --transport enet: net_check is an enet6 client, so the smoke server must speak enet6
+          # (fl-server defaults to GNS when built with FL_ENABLE_GNS).
+          ./build/debug/server/fl-server/fl-server 7002 1 --transport enet &
           FL_SERVER_PID=$!
           # Wait up to 10 s for the server to finish startup (primeSpawnHeight can block up to
           # 5 s on first run with no cached terrain chunks, e.g. in CI without content packs).
