@@ -517,16 +517,17 @@ int main(int argc, char** argv) {
         const double spreadM = cfg.testSpawnSpreadKm * 1000.0;
         const auto positions = fl::testSpawnPositions(cfg.testSpawnAiCount, spreadM, cfg.testSpawnAglM, baseElev);
         uint32_t spawned = 0;
-        for (const auto& p : positions) {
+        for (const auto& pos : positions) {
             fl::EntityTransform t{};
-            t.pos[0] = p[0];
-            t.pos[1] = p[1];
-            t.pos[2] = p[2];
+            t.pos[0] = pos[0];
+            t.pos[1] = pos[1];
+            t.pos[2] = pos[2];
             const fl::EntityId id = entityManager.spawn("builtin:debug-entity", t);
             if (!id.valid())
                 break; // soft cap or unregistered type — stop cleanly
-            broadcaster.registerController(id, std::make_unique<fl::ai::LoiterController>(
-                                                   glm::dvec3(p[0], p[1], p[2]), 3000.f, static_cast<float>(p[1])));
+            broadcaster.registerController(
+                id, std::make_unique<fl::ai::LoiterController>(glm::dvec3(pos[0], pos[1], pos[2]), 3000.f,
+                                                               static_cast<float>(pos[1])));
             ++spawned;
         }
         char sbuf[160];
